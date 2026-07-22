@@ -62,6 +62,41 @@ tracer jumps to a neighbour. The lift slopes are unaffected: they come from the
 straight lower part of each curve, which stays well separated, and the overlay
 was checked visually for all fourteen.
 
+### Drag and moment: attempted, not delivered
+
+Figure 32 (page 50) is the NACA 0015 drag polar and figure 37 the moment. Both
+were attempted and neither is delivered, for a specific and checkable reason.
+
+These figures stack each Mach curve on its **own cd = 0 baseline** rather than a
+shared axis, so every value depends on knowing which baseline belongs to which
+Mach. The evidence does not settle that:
+
+- the y-axis carries **11** labelled "0" ticks, evenly spaced 158.7 px apart
+  (= 0.02 in cd, fixed by the graduated 0.02–0.12 scale above the top curve)
+- the plot frame spans 223 → 3005 px, which leaves room for only **12** such
+  baselines
+- but the figure carries **14** Mach labels, 0.300 through 0.825
+
+Twelve slots, fourteen curves. Guessing wrong by one baseline shifts every cd by
+0.02 — about **twice** the actual drag of this section at low Mach — and the
+result would still look entirely plausible. That is the worst kind of error, so
+no drag numbers are recorded.
+
+### Worth a second look: figures 40, 41 and 42
+
+Page 54 carries three figures on ordinary, unstaggered axes, which makes them far
+more tractable than the carpet plots:
+
+| figure | content | why it matters |
+|---|---|---|
+| 40 | lift-curve slope vs Mach at cl = 0.20, all five airfoils | an independent check on the slopes extracted here |
+| 41 | angle of zero lift vs Mach, all five | should read 0 for the 0015 at every Mach |
+| 42 | **section drag coefficient vs Mach at cl = 0.20**, all five | the absolute drag reference figure 32 could not give |
+
+The obstacle is different here and may be solvable: the five airfoils are drawn
+as five dash patterns that nearly coincide below M = 0.7, so the work is telling
+the 0015 curve from its neighbours rather than calibrating an axis.
+
 **Not extracted from the Datcom sheets: every Mach number other than 0.30, and
 all CD/CM polars.** This was attempted seriously and abandoned. Six
 substantively different methods were tried:
