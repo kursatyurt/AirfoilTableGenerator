@@ -1,0 +1,14 @@
+# built or cloned by INSTALL.sh
+.venv/
+opt/
+env.sh
+install.log
+
+# per-machine, written by tune_np.py
+machine.conf
+
+# case output
+runs/
+*.log
+
+__pycache__/
