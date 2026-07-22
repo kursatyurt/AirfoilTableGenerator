@@ -1,0 +1,22 @@
+# NACA 0012 lift-curve landmarks through and beyond stall.
+#
+# Source: US Army Helicopter Design Datcom, Vol I - Airfoils, USAAMRDL CR 76-2,
+#         sheet 1.3.30 "NACA 0012 - Including Reverse Flow", Re = 1.8e6,
+#         originally Critzos, Heyson & Boswinkle, "Aerodynamic Characteristics of
+#         NACA 0012 Airfoil Section at Angles of Attack from 0 to 180 deg",
+#         NACA TN 3361, January 1955.
+#
+# THESE ARE READ OFF A PLOT, NOT TABULATED VALUES. The Datcom sheet gives curves
+# only, on a degraded 1976 scan. Values were measured against a pixel grid
+# calibrated to the printed axis labels, and the uncertainty columns are honest
+# bounds on that reading -- not experimental scatter. Use them to check that a
+# computed polar lands in the right place, never as a precision benchmark.
+#
+# Automated curve tracing was attempted and abandoned: below CL ~ 0 the scan is
+# effectively solid black, so the negative-CL branch (alpha > ~95 deg) is not
+# recoverable at all and is deliberately absent here.
+feature,alpha_deg,alpha_uncertainty_deg,cl,cl_uncertainty
+zero_lift,0.0,0.5,0.000,0.010
+max_lift,12.0,1.0,1.300,0.040
+post_stall_minimum,20.0,2.0,0.750,0.050
+secondary_maximum,42.0,3.0,1.120,0.050
