@@ -1,0 +1,54 @@
+# NACA 0015 lift curve, M = 0.30, 1e6 <= Re <= 2e6.
+#
+# Source: US Army Helicopter Design Datcom, Vol I - Airfoils, USAAMRDL CR 76-2,
+#         sheet 1.3.60 (AD-A033425), M = 0.30 curve (the leftmost, unstaggered
+#         curve of the CL-alpha carpet plot). Ames 1 x 3.5 ft low-turbulence high
+#         speed tunnel; lift from tunnel-wall reactions; smooth model, so natural
+#         transition. Originally Graham, Nitzberg & Olson, NACA Report 832, 1945.
+#
+# DIGITISED FROM A PLOTTED CURVE, not a printed table. Traced automatically
+# against a grid calibrated to the detected major gridlines, then verified by
+# overlaying the trace on the figure. Two independent checks support it:
+#   * the fitted zero-lift angle is 0.08 deg, where symmetry demands exactly 0
+#   * the fitted lift slope is 0.1003 /deg, physically sensible for a 15% section
+# Estimated accuracy roughly +/-0.02 in CL and +/-0.3 deg in alpha. Below about
+# alpha = 0.5 deg the curve is coincident with the CL = 0 gridline and the trace
+# is unreliable, so the first point is dropped.
+#
+# No drag reference is provided: the CD carpet plot on the same sheet has a dozen
+# overlapping curves that cannot be separated at this scan quality.
+alpha_deg,cl
+0.5,0.047
+1.0,0.096
+1.5,0.141
+2.0,0.192
+2.5,0.243
+3.0,0.291
+3.5,0.342
+4.0,0.389
+4.5,0.451
+5.0,0.490
+5.5,0.547
+6.0,0.592
+6.5,0.650
+7.0,0.689
+7.5,0.746
+8.0,0.791
+8.5,0.847
+9.0,0.890
+9.5,0.948
+10.0,0.993
+10.5,1.035
+11.0,1.056
+11.5,1.079
+12.0,1.082
+12.5,1.072
+13.0,1.064
+13.5,1.043
+14.0,1.038
+14.5,1.002
+15.0,1.010
+15.5,1.002
+16.0,0.996
+16.5,1.003
+17.0,0.999
