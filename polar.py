@@ -49,7 +49,15 @@ SCREEN_OUTPUT= ( INNER_ITER, RMS_DENSITY, RMS_MOMENTUM-X, LIFT, DRAG )
 """
 
 
-def make_cfg(regime, aoa, re, mach, iters, restart):
+TRANSITION = {
+    # both keep KIND_TURB_MODEL= SA; neither replaces it
+    "none": "",                      # fully turbulent from the leading edge
+    "bcm": "SA_OPTIONS= BCM\n",      # Bas-Cakmakcioglu, algebraic, no extra transport equation
+    "lm": "KIND_TRANS_MODEL= LM\n",  # Langtry-Menter gamma-Re_theta, two extra equations
+}
+
+
+def make_cfg(regime, aoa, re, mach, iters, restart, transition="none", tu=0.001):
     v = mach * A_SOUND
     tag = f"{aoa:+.2f}"
     if regime == "inc":
@@ -87,7 +95,8 @@ CONV_FIELD= RMS_DENSITY
 CONV_NUM_METHOD_FLOW= ROE
 ENTROPY_FIX_COEFF= 0.05
 """
-    return head + COMMON + f"""\
+    return head + COMMON + TRANSITION[transition] + f"""\
+FREESTREAM_TURBULENCEINTENSITY= {tu}
 RESTART_SOL= {"YES" if restart else "NO"}
 ITER= {iters}
 CONV_FILENAME= history_{tag}
@@ -140,6 +149,12 @@ def main():
     ap.add_argument("--yplus", type=float, default=1.0)
     ap.add_argument("--farfield", type=float, default=15.0,
                     help="farfield radius in chords; go well past 15 for transonic runs")
+    ap.add_argument("--transition", choices=list(TRANSITION), default="none",
+                    help="laminar-turbulent transition on top of SA: bcm is algebraic and cheap, "
+                         "lm adds two transport equations")
+    ap.add_argument("--tu", type=float, default=0.001,
+                    help="freestream turbulence intensity for the transition models "
+                         "(0.001 = 0.1%%, a low-turbulence wind tunnel)")
     ap.add_argument("--outdir", default=None)
     # ponytail: argparse reads a leading '-' as an option, so "--aoa -4:16:2" fails.
     argv, rest = [], list(sys.argv[1:])
@@ -174,7 +189,7 @@ def main():
     for aoa in parse_aoa(a.aoa):
         tag = f"{aoa:+.2f}"
         cfg = case / f"aoa_{tag}.cfg"
-        cfg.write_text(make_cfg(a.regime, aoa, a.re, a.mach, a.iters, restart))
+        cfg.write_text(make_cfg(a.regime, aoa, a.re, a.mach, a.iters, restart, a.transition, a.tu))
         print(f"--- AoA {aoa:g} ({a.np} ranks) ...", end=" ", flush=True)
         with open(case / f"aoa_{tag}.log", "w") as log:
             rc = subprocess.call(["mpirun", "-n", str(a.np), "SU2_CFD", cfg.name],
@@ -235,6 +250,12 @@ def selftest():
     assert "CONV_NUM_METHOD_FLOW= FDS" in cfg and "ROE" not in cfg
     comp = make_cfg("comp", 0.0, 1e6, 0.8, 500, False)
     assert "CONV_NUM_METHOD_FLOW= ROE" in comp and "FDS" not in comp
+    # transition rides on top of SA, it never replaces the turbulence model
+    for t in TRANSITION:
+        c = make_cfg("inc", 0.0, 1e6, 0.15, 500, False, transition=t, tu=0.002)
+        assert "KIND_TURB_MODEL= SA" in c and "FREESTREAM_TURBULENCEINTENSITY= 0.002" in c
+    assert "SA_OPTIONS= BCM" in make_cfg("inc", 0.0, 1e6, 0.15, 500, False, "bcm")
+    assert "KIND_TRANS_MODEL= LM" in make_cfg("inc", 0.0, 1e6, 0.15, 500, False, "lm")
     print("selftest ok")
 
 

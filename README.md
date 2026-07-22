@@ -65,11 +65,24 @@ by a couple of degrees, so this cuts most of the sweep's cost. Delete
 | `--iters` | `2000` | raise it if `polar.csv` shows `converged=0`. |
 | `--yplus` | `1.0` | sets the wall spacing and the number of normal layers. |
 | `--farfield` | `15` | farfield radius in chords. Push it well past 15 for transonic. |
+| `--transition` | `none` | `bcm` or `lm` add laminar-turbulent transition on top of SA. |
+| `--tu` | `0.001` | freestream turbulence intensity the transition models key off. |
 
-Turbulence is Spalart–Allmaras, fully turbulent from the leading edge — no
-transition model, so drag at low Re is overpredicted and this will not capture a
-laminar bucket. Stall angles are not trustworthy either; steady RANS on a 2D
-airfoil stops being meaningful once the flow separates.
+## Transition
+
+Turbulence is always Spalart–Allmaras. `--transition` adds a laminar-turbulent
+transition model on top of it rather than replacing it:
+
+- `none` (default) — fully turbulent from the leading edge. Overpredicts drag at
+  low Re and cannot produce a laminar drag bucket.
+- `bcm` — Bas-Cakmakcioglu, algebraic, built specifically for SA. No extra
+  transport equation, so it costs almost nothing.
+- `lm` — Langtry-Menter γ-Reθ. Two more transport equations, slower and harder
+  to converge.
+
+Both read `--tu`, the freestream turbulence intensity (`0.001` = 0.1%, a
+low-turbulence wind tunnel). Transition location is sensitive to it, so match it
+to the experiment you are comparing against.
 
 ## What comes from where
 
