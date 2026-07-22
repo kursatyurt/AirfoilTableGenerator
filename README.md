@@ -96,7 +96,7 @@ to the experiment you are comparing against.
 
 ## Validation
 
-NACA 0012, Re 1e6, M 0.15, y+ = 1, converged to `rms[P] = -8`:
+NACA 0012, Re 1e6, M 0.15, y+ = 1, converged to `rms[P] = -6`:
 
 | | value | expected |
 |---|---|---|
@@ -116,8 +116,8 @@ Symmetry holds in both, and M 0.8 picks up the expected shock drag rise. Two
 caveats. The compressible solver gives CD 0.0098 at M 0.15 where the
 incompressible one gives 0.0107 — an 8% gap at conditions where the two should
 very nearly agree, most likely the ROE vs FDS dissipation, so do not mix regimes
-within one study. And neither compressible case reached the `-8` convergence
-target in the iterations given, which is why both report `converged=0`; transonic
+within one study. Both compressible cases reached the `-6` convergence
+target only marginally (M 0.8 at −5.1 still misses it); transonic
 especially needs more `--iters` and a farfield much larger than the 15-chord
 default.
 

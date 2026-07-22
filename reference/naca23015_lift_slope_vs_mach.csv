@@ -1,0 +1,25 @@
+# NACA 23015, digitised from figure 28 of NACA Report 832 (Graham, Nitzberg
+# & Olson, 1945), Ames 1x3.5 ft high-speed tunnel, 1e6 <= Re <= 2e6.
+# Produced by reference/digitize_tr832_23015.py -- see that file for method
+# and limits.
+# zero_lift_deg is a self-check, not data: the section is cambered, so instead
+# of symmetry the check is thin-airfoil theory on the 230 mean line, which gives
+# alpha_L0 = -1.09 deg (published experiment: about -1.2 deg). Prandtl-Glauert
+# leaves alpha_L0 Mach-independent, so the fourteen values must also agree with
+# each other; they span 0.29 deg. That validates the axis calibration,
+# the 4 deg stagger, and each curve's identity.
+mach,lift_slope_per_deg,zero_lift_deg
+0.3,0.1000,-1.20
+0.4,0.1054,-1.14
+0.5,0.1080,-1.20
+0.55,0.1114,-1.21
+0.6,0.1161,-1.18
+0.625,0.1154,-1.20
+0.65,0.1169,-1.06
+0.675,0.1149,-1.07
+0.7,0.1121,-1.00
+0.725,0.0973,-1.09
+0.75,0.0974,-1.18
+0.775,0.0996,-1.06
+0.8,0.0958,-0.98
+0.825,0.0947,-1.27

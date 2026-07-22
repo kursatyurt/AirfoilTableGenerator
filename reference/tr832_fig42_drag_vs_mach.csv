@@ -1,0 +1,65 @@
+# NACA Report 832 (Graham, Nitzberg & Olson, 1945), Ames 1x3.5 ft
+# high-speed tunnel, 1e6 <= Re <= 2e6.  Figure 42 on printed page 49.
+# The five sections of Report 832 are NACA 65_2-215 (a=0.5), 66,2-215
+# (a=0.6), 0015, 23015 and 4415 -- five cambers at 15% thickness, NOT a
+# 0006..0018 thickness family.
+# Produced by reference/digitize_tr832_fig40_42.py -- see that file for
+# the method, the self-checks and the limits.
+# NO per-airfoil curve is given for this figure.  All five dash
+# patterns lie within a line width of one another below M ~ 0.66 and
+# cross each other above M ~ 0.75, and nothing independent of the dash
+# pattern distinguishes them, so naming any single trace would be a
+# guess.  What is given instead is the envelope of the bundle -- the
+# highest and the lowest of the five curves at each Mach number.  All
+# five sections lie between the two value columns.
+# columns = readable image columns averaged into the Mach bin.
+mach,section_drag_coefficient_max,section_drag_coefficient_min,columns
+0.305,0.00865,0.00490,8
+0.310,0.00811,0.00514,9
+0.315,0.00703,0.00488,9
+0.320,0.00705,0.00490,8
+0.325,0.00685,0.00496,9
+0.330,0.00703,0.00498,9
+0.335,0.00720,0.00498,8
+0.340,0.00685,0.00494,9
+0.345,0.00720,0.00503,8
+0.355,0.00705,0.00506,7
+0.360,0.00705,0.00490,9
+0.365,0.00686,0.00494,9
+0.370,0.00690,0.00493,9
+0.375,0.00679,0.00482,8
+0.380,0.00675,0.00497,9
+0.385,0.00697,0.00484,9
+0.390,0.00690,0.00496,9
+0.395,0.00696,0.00488,7
+0.405,0.00679,0.00488,8
+0.410,0.00625,0.00486,8
+0.415,0.00692,0.00497,9
+0.420,0.00669,0.00486,9
+0.425,0.00708,0.00502,9
+0.430,0.00704,0.00488,8
+0.435,0.00703,0.00501,9
+0.440,0.00710,0.00494,9
+0.445,0.00712,0.00491,7
+0.455,0.00722,0.00490,8
+0.460,0.00718,0.00524,9
+0.465,0.00723,0.00527,8
+0.470,0.00741,0.00524,9
+0.475,0.00765,0.00519,9
+0.480,0.00755,0.00538,9
+0.485,0.00778,0.00503,8
+0.490,0.00724,0.00504,9
+0.495,0.00757,0.00519,8
+0.505,0.00717,0.00547,7
+0.510,0.00778,0.00533,9
+0.515,0.00785,0.00550,9
+0.520,0.00790,0.00541,8
+0.525,0.00790,0.00542,9
+0.530,0.00776,0.00543,9
+0.535,0.00749,0.00534,9
+0.540,0.00807,0.00537,8
+0.545,0.00717,0.00548,8
+0.555,0.00544,0.00553,8
+0.560,0.00544,0.00545,8
+0.565,0.00544,0.00546,9
+0.570,0.00544,0.00540,9

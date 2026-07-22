@@ -12,6 +12,7 @@ FALCON = ROOT / "opt" / "FALCON"
 sys.path.insert(0, str(FALCON))
 
 RHO, A_SOUND = 1.225, 341.348  # sea level, matches FALCON's meshing.py
+CONV_MINVAL = -6  # log10 residual target; must match CONV_RESIDUAL_MINVAL in COMMON
 
 COMMON = """\
 MATH_PROBLEM= DIRECT
@@ -36,7 +37,7 @@ LINEAR_SOLVER= FGMRES
 LINEAR_SOLVER_PREC= ILU
 LINEAR_SOLVER_ERROR= 1E-6
 LINEAR_SOLVER_ITER= 20
-CONV_RESIDUAL_MINVAL= -8
+CONV_RESIDUAL_MINVAL= -6
 CONV_STARTITER= 10
 MESH_FILENAME= airfoil.su2
 MESH_FORMAT= SU2
@@ -200,7 +201,7 @@ def main():
             continue
         h = read_history(hist)
         res = h["rms[P]"] if a.regime == "inc" else h["rms[Rho]"]  # inc solver reports pressure
-        rows.append((aoa, h["CL"], h["CD"], h.get("CMz", float("nan")), res <= -8))
+        rows.append((aoa, h["CL"], h["CD"], h.get("CMz", float("nan")), res <= CONV_MINVAL))
         print(f"CL={rows[-1][1]:.4f} CD={rows[-1][2]:.5f}")
         # warm-start the next AoA from this solution
         shutil.copy(case / "restart_flow.dat", case / "solution_flow.dat")
@@ -241,8 +242,10 @@ def selftest():
                  '1, -8.5, 0.4412, 0.00931, -0.00123\n')
     h = read_history(p)
     assert abs(h["CL"] - 0.4412) < 1e-9 and abs(h["CD"] - 0.00931) < 1e-9, h
-    assert h["rms[Rho]"] <= -8
-    cfg = make_cfg("inc", 2.0, 1e6, 0.15, 500, True)
+    assert h["rms[Rho]"] <= CONV_MINVAL
+    # the converged flag and the solver's own stop criterion must not drift apart
+    assert f"CONV_RESIDUAL_MINVAL= {CONV_MINVAL}" in COMMON
+    cfg =make_cfg("inc", 2.0, 1e6, 0.15, 500, True)
     assert "MU_CONSTANT= 6.2722695000e-05" in cfg and "RESTART_SOL= YES" in cfg, cfg
     assert "SOLVER= RANS" in make_cfg("comp", 0.0, 1e6, 0.8, 500, False)
     # the convective scheme is solver-specific: FDS is incompressible-only, ROE

@@ -15,4 +15,4 @@ __pycache__/
 
 # fetched on demand by reference/digitize_tr832.py (56 MB)
 reference/naca_tr832.pdf
-reference/_tr832_p47.png
+reference/_tr832_p*.png

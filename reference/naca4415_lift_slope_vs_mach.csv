@@ -1,0 +1,22 @@
+# NACA 4415, digitised from figure 29 of NACA Report 832 (Graham, Nitzberg
+# & Olson, 1945), Ames 1x3.5 ft high-speed tunnel, 1e6 <= Re <= 2e6.
+# Produced by reference/digitize_tr832_4415.py -- see that file for method
+# and limits.
+# Only M <= 0.650. Above that the shock-induced kink leaves the curve with no
+# straight segment, the fitted zero-lift angle walks off to -4.4 ... -5.8 deg,
+# and the slope is not claimed. No CLmax file is produced at all: the peak
+# tracer that works on the 0015 latches onto neighbouring curves here.
+# zero_lift_deg is a self-check, not data. The section is cambered, so the
+# symmetry test used for the 0015 does not apply; instead thin-airfoil theory
+# on the 4-digit mean line gives -4.15 deg, the published experimental value
+# is about -4.0 deg, and the 7 accepted curves agree with each other to
+# 0.28 deg -- which validates the axis calibration, the 4 deg stagger, and
+# each curve's identity (a one-curve index error would show as 0 or -8 deg).
+mach,lift_slope_per_deg,zero_lift_deg
+0.3,0.0994,-4.21
+0.4,0.1054,-3.98
+0.5,0.1107,-3.96
+0.55,0.1148,-3.93
+0.6,0.1189,-3.93
+0.625,0.1209,-4.01
+0.65,0.1213,-4.17
