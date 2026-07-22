@@ -31,14 +31,38 @@ and confirming it lands on the printed "1.2", "0.8", "0.4", "0" and "0", "20.",
 "40." labels — but they are still eye-read from a curve. The uncertainty columns
 bound the reading, not the experiment.
 
-**Not extracted: full CL/CD/CM polars.** Three attempts at automated curve
-tracing failed. On the multi-Mach sheets (1.3.20, 1.3.60) eight to twelve curves
-overlap on one axis and cannot be separated at this scan quality; on the
-single-curve 180° sheet (1.3.30) the negative-CL branch sits in a region of the
-scan that is uniformly black. Anything presented as a dense digitised polar from
-this document would be invented, so none is provided. For a precision benchmark,
-go to the original sources the Datcom cites — NACA TN 3361 for the 180° data,
-ARC C.P. 1261 (Gregory & Wilby) for the NPL NACA 0012.
+**Not extracted: every Mach number other than 0.30, and all CD/CM polars.**
+This was attempted seriously and abandoned. Six substantively different methods
+were tried:
+
+1. intensity-following trace of a single curve — wandered onto background ink
+2. trace restricted to solid black runs — same, the lower scan region is solid
+3. slope-predicting tracker over all 14 Mach curves — merged adjacent curves
+   (the giveaway: two Mach numbers fitting to identical intercepts)
+4. multi-target tracking with exclusive assignment — worse; tracks lost their
+   curve and coasted along gridlines
+5. row-crossing detection using a predicted slope — **circular and invalid**: the
+   search window assumed 0.10/deg, so every Mach "measured" 0.09–0.10/deg and
+   flatly contradicted Prandtl-Glauert. Caught precisely because the extracted
+   slopes did not rise with Mach as physics requires
+6. row-crossing with gridlines discriminated by their lack of motion — the
+   halftone screen makes row thresholding useless; the same figure yielded
+   17 to 79 "crossings" depending on which row was sampled
+
+The M=0.30 curve is extractable only because it is the leftmost of a staggered
+carpet plot with clear space to its left. The remaining thirteen sit in a fan
+2° apart, cross each other past stall, and are interleaved with gridlines of the
+same darkness and the same 2° spacing.
+
+CLmax for the next two or three Mach numbers is visually readable, but assigning
+a peak to the correct Mach means counting curves through a cluttered region, and
+**there is no independent physical check on that assignment** — unlike the
+zero-lift test that caught a 2° axis error on the M=0.30 curve. An off-by-one
+there would mislabel the Mach number, so those values are not recorded either.
+
+For anything beyond M=0.30, go to the original sources the Datcom cites: NACA
+Report 832 (Graham, Nitzberg & Olson) for the 0015, NACA TN 3361 for the 0012
+180° data, ARC C.P. 1261 (Gregory & Wilby) for the NPL 0012.
 
 ## Using the landmarks
 
