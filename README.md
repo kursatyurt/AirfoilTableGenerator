@@ -64,6 +64,7 @@ by a couple of degrees, so this cuts most of the sweep's cost. Delete
 | `--np` | from `machine.conf` | MPI ranks. |
 | `--iters` | `2000` | raise it if `polar.csv` shows `converged=0`. |
 | `--yplus` | `1.0` | sets the wall spacing and the number of normal layers. |
+| `--farfield` | `15` | farfield radius in chords. Push it well past 15 for transonic. |
 
 Turbulence is Spalart–Allmaras, fully turbulent from the leading edge — no
 transition model, so drag at low Re is overpredicted and this will not capture a
@@ -90,6 +91,22 @@ NACA 0012, Re 1e6, M 0.15, y+ = 1, converged to `rms[P] = -8`:
 | CMz at 0° | -4.2e-05 | 0 by symmetry |
 | CD at 0° | 0.0107 | ~0.011 fully turbulent at this Re |
 | dCL/dα | 5.9 /rad | 2π thin-airfoil |
+
+Compressible regime, NACA 0012, AoA 0, `--farfield 15`:
+
+| case | CL | CD | rms[Rho] reached |
+|---|---|---|---|
+| M 0.15, Re 1e6, 3000 iters | -3.0e-04 | 0.0098 | -6.9 |
+| M 0.80, Re 9e6, 4000 iters | -2.4e-04 | 0.0169 | -5.1 |
+
+Symmetry holds in both, and M 0.8 picks up the expected shock drag rise. Two
+caveats. The compressible solver gives CD 0.0098 at M 0.15 where the
+incompressible one gives 0.0107 — an 8% gap at conditions where the two should
+very nearly agree, most likely the ROE vs FDS dissipation, so do not mix regimes
+within one study. And neither compressible case reached the `-8` convergence
+target in the iterations given, which is why both report `converged=0`; transonic
+especially needs more `--iters` and a farfield much larger than the 15-chord
+default.
 
 `python mesh.py`, `python polar.py --selftest` and `python tune_np.py --selftest`
 run the unit checks (mesh block symmetry, AoA parsing, SU2 history-CSV parsing,

@@ -25,7 +25,6 @@ REF_ORIGIN_MOMENT_Z= 0.00
 REF_LENGTH= 1.0
 REF_AREA= 1.0
 NUM_METHOD_GRAD= GREEN_GAUSS
-CONV_NUM_METHOD_FLOW= FDS
 MUSCL_FLOW= YES
 SLOPE_LIMITER_FLOW= VENKATAKRISHNAN
 VENKAT_LIMITER_COEFF= 0.05
@@ -69,6 +68,7 @@ MARKER_HEATFLUX= ( Airfoil, 0.0 )
 AOA= {aoa}
 CFL_NUMBER= 25.0
 CONV_FIELD= RMS_PRESSURE
+CONV_NUM_METHOD_FLOW= FDS
 """
     else:
         head = f"""\
@@ -84,6 +84,8 @@ CFL_NUMBER= 5.0
 CFL_ADAPT= YES
 CFL_ADAPT_PARAM= ( 0.1, 2.0, 5.0, 50.0 )
 CONV_FIELD= RMS_DENSITY
+CONV_NUM_METHOD_FLOW= ROE
+ENTROPY_FIX_COEFF= 0.05
 """
     return head + COMMON + f"""\
 RESTART_SOL= {"YES" if restart else "NO"}
@@ -136,6 +138,8 @@ def main():
                     help="MPI ranks; defaults to machine.conf from tune_np.py, else half the cores")
     ap.add_argument("--iters", type=int, default=2000)
     ap.add_argument("--yplus", type=float, default=1.0)
+    ap.add_argument("--farfield", type=float, default=15.0,
+                    help="farfield radius in chords; go well past 15 for transonic runs")
     ap.add_argument("--outdir", default=None)
     # ponytail: argparse reads a leading '-' as an option, so "--aoa -4:16:2" fails.
     argv, rest = [], list(sys.argv[1:])
@@ -162,7 +166,8 @@ def main():
     mesh = case / "airfoil.su2"
     if not mesh.exists():
         from mesh import generate_mesh
-        generate_mesh(x, y, a.re, a.mach, y_plus=a.yplus, path=mesh)
+        generate_mesh(x, y, a.re, a.mach, y_plus=a.yplus, path=mesh,
+                      inlet_radius=a.farfield, downstream=max(25.0, a.farfield + 10))
     print(f"mesh: {mesh}")
 
     rows, restart = [], False
@@ -225,6 +230,11 @@ def selftest():
     cfg = make_cfg("inc", 2.0, 1e6, 0.15, 500, True)
     assert "MU_CONSTANT= 6.2722695000e-05" in cfg and "RESTART_SOL= YES" in cfg, cfg
     assert "SOLVER= RANS" in make_cfg("comp", 0.0, 1e6, 0.8, 500, False)
+    # the convective scheme is solver-specific: FDS is incompressible-only, ROE
+    # compressible-only, and SU2 rejects the wrong one at startup
+    assert "CONV_NUM_METHOD_FLOW= FDS" in cfg and "ROE" not in cfg
+    comp = make_cfg("comp", 0.0, 1e6, 0.8, 500, False)
+    assert "CONV_NUM_METHOD_FLOW= ROE" in comp and "FDS" not in comp
     print("selftest ok")
 
 
