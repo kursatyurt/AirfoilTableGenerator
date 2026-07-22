@@ -31,9 +31,40 @@ and confirming it lands on the printed "1.2", "0.8", "0.4", "0" and "0", "20.",
 "40." labels — but they are still eye-read from a curve. The uncertainty columns
 bound the reading, not the experiment.
 
-**Not extracted: every Mach number other than 0.30, and all CD/CM polars.**
-This was attempted seriously and abandoned. Six substantively different methods
-were tried:
+## NACA Report 832 — the original source, and a much better scan
+
+The Datcom cites **NACA Report 832** (Graham, Nitzberg & Olson, 1945) for the
+0015 data. NASA's scan of it ([NTRS
+19930091909](https://ntrs.nasa.gov/citations/19930091909)) is crisp line art on
+white, not a halftone photocopy, and its figure 27 carries all fourteen Mach
+curves. `digitize_tr832.py` fetches that PDF (56 MB, gitignored) and extracts:
+
+- `naca0015_lift_slope_vs_mach.csv` — lift slope for **all 14 Mach numbers**,
+  0.300 to 0.825
+- `naca0015_clmax_vs_mach.csv` — CLmax and stall angle for M = 0.300, 0.400,
+  0.500 only
+
+Three independent checks back this, all run by `check_reference.py`:
+
+1. **Symmetry.** Every curve must cross CL = 0 at its own α = 0. All fourteen
+   fitted zero-lift angles land within 0.21°, confirming the axis calibration,
+   the 4° stagger, and each curve's identity.
+2. **Compressibility.** Nothing in the digitiser knows about Mach — each curve
+   is fitted independently — yet the slopes track Prandtl-Glauert to within 3%
+   up to M = 0.675 and then fall away (−19% at 0.70, −44% at 0.825), exactly the
+   force-divergence behaviour a real airfoil must show.
+3. **Cross-source.** The M = 0.30 slope from this scan (0.1000/deg) and from the
+   Datcom scan (0.1003/deg) agree to **0.3%** — two independent digitisations of
+   two different reproductions of the same 1945 experiment.
+
+CLmax stops at M = 0.500 because above it the curves crowd together and the peak
+tracer jumps to a neighbour. The lift slopes are unaffected: they come from the
+straight lower part of each curve, which stays well separated, and the overlay
+was checked visually for all fourteen.
+
+**Not extracted from the Datcom sheets: every Mach number other than 0.30, and
+all CD/CM polars.** This was attempted seriously and abandoned. Six
+substantively different methods were tried:
 
 1. intensity-following trace of a single curve — wandered onto background ink
 2. trace restricted to solid black runs — same, the lower scan region is solid

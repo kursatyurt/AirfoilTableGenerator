@@ -1,0 +1,11 @@
+# NACA 0015, digitised from figure 27 of NACA Report 832 (Graham, Nitzberg
+# & Olson, 1945), Ames 1x3.5 ft high-speed tunnel, 1e6 <= Re <= 2e6.
+# Produced by reference/digitize_tr832.py -- see that file for method and limits.
+# zero_lift_deg is a self-check, not data: symmetry demands 0, and every curve
+# lands within 0.21 deg, which validates the axis calibration and curve identity.
+# Only M <= 0.500: above that the curves crowd and the peak tracer jumps
+# to a neighbouring curve, so no value is claimed.
+mach,cl_max,alpha_stall_deg
+0.3,1.070,11.6
+0.4,1.005,11.7
+0.5,0.814,7.7
