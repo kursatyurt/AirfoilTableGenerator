@@ -35,10 +35,12 @@ Measured on a 32-core box, 112k-point mesh:
 | 24 | 23.0 | 2.28x | 19% |
 | 32 | — | fails | — |
 
-Scaling is poor past 8 ranks: 24 is the fastest but buys 16% over 8 ranks for
-three times the cores, and 12 is reproducibly *slower* than 8. Use
-`--tolerance 0.25` to bias the choice toward fewer ranks, or pass `--np`
-explicitly to override `machine.conf` entirely.
+Scaling is poor past 8 ranks: 24 is the fastest in raw wall clock but buys only
+16% over 8 ranks for three times the cores, and 12 is reproducibly *slower* than
+8. So the picker takes the **fewest ranks within 25% of the fastest time**
+(`--tolerance`), which chooses 8 here — the knee, and it leaves the machine
+usable. Drop to `--tolerance 0` to chase wall clock regardless of core cost, or
+pass `--np` to override `machine.conf` entirely.
 
 SU2 built against OpenMPI aborts in `MPI_Win_create` on a single rank, so 2 is
 the practical minimum and the study starts there.

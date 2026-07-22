@@ -39,9 +39,12 @@ def main():
     ap.add_argument("--iters", type=int, default=150, help="iterations per timing run")
     ap.add_argument("--ranks", default=None, help="comma list; default 2,4,8,... up to core count")
     ap.add_argument("--repeats", type=int, default=3, help="timings per rank count; the best is kept")
-    ap.add_argument("--tolerance", type=float, default=0.10,
+    # ponytail: 0.25, not 0. The last doublings of rank count buy a few percent of
+    # wall clock for half the machine; on a 2D case that is a bad trade, and it
+    # stops one sweep from monopolising a shared box.
+    ap.add_argument("--tolerance", type=float, default=0.25,
                     help="accept the fewest ranks within this fraction of the fastest time; "
-                         "raise it to trade a little wall clock for free cores")
+                         "lower it to chase wall clock at any core cost")
     a = ap.parse_args()
 
     if a.show:
@@ -101,12 +104,16 @@ def main():
 
 def _selftest():
     """The pick rule: fewest ranks among those within 5% of the fastest."""
-    pick = lambda res: min((r for r in res if r[1] <= min(res, key=lambda q: q[1])[1] * 1.10),
-                           key=lambda r: r[0])
-    # 4 ranks are within 10% of the 8-rank best, so take 4 and leave cores free
+    pick = lambda res, tol=0.25: min((r for r in res if r[1] <= min(res, key=lambda q: q[1])[1] * (1 + tol)),
+                                     key=lambda r: r[0])
+    # 4 ranks are within tolerance of the 8-rank best, so take 4 and leave cores free
     assert pick([(2, 100.0), (4, 30.0), (8, 29.5), (16, 40.0)]) == (4, 30.0)
     assert pick([(2, 100.0), (4, 30.0), (8, 20.0), (16, 90.0)]) == (8, 20.0)
     assert pick([(2, 10.0), (32, 40.0)]) == (2, 10.0)  # scaling never pays off
+    # this machine's measured times: 24 is fastest, but 8 is within 25% of it
+    measured = [(2, 52.4), (4, 35.3), (8, 26.7), (12, 30.0), (16, 27.2), (24, 23.0)]
+    assert pick(measured) == (8, 26.7)
+    assert pick(measured, tol=0.0) == (24, 23.0)
     print("tune_np selftest ok")
 
 
