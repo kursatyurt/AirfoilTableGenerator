@@ -121,6 +121,44 @@ target in the iterations given, which is why both report `converged=0`; transoni
 especially needs more `--iters` and a farfield much larger than the 15-chord
 default.
 
+### Stall
+
+NACA 0012, Re 1e6, M 0.15, fully turbulent, warm-started through the sweep:
+
+| α | 8 | 10 | 12 | 14 | 16 | 18 | 20 |
+|---|---|---|---|---|---|---|---|
+| CL | 0.825 | 1.019 | 1.197 | 1.352 | **1.455** | 1.404 | 1.117 |
+| CD | 0.0179 | 0.0225 | 0.0286 | 0.0367 | 0.0471 | 0.0624 | 0.1114 |
+
+CLmax lands at 1.455 at 16°, against 1.30 at 12° in the experiment
+(`reference/naca0012_stall_landmarks.csv`) — **12% high and 4° late**. That is
+the textbook fully-turbulent steady-RANS result, not a bug: no transition model
+means no laminar separation to trigger stall early, and steady RANS cannot
+represent the unsteady separated wake that limits real CLmax. Treat the
+post-stall points as qualitative. Every point reports `converged=1`, so
+convergence is not what is wrong — the physics model is.
+
+### Transition models compared
+
+NACA 0012, Re 1e6, M 0.15, α = 0, each run to 4000 iterations:
+
+| `--transition` | CL | CD | converged |
+|---|---|---|---|
+| `none` | +0.00006 | 0.01074 | yes |
+| `bcm` | −0.0777 | 0.00636 | **no** |
+| `lm` | −0.00138 | 0.00485 | yes |
+
+Transition roughly halves the drag, as it should at this Reynolds number.
+
+**Known issue — BCM runs into a limit cycle here.** It converges normally to
+`rms[P]` = −7.5 by iteration 1500 with CL = −0.002, correctly symmetric, and
+then the residual *climbs back* to about −5.8 while CL wanders to −0.08. More
+iterations will not help; the transition location is oscillating. A symmetric
+airfoil at zero incidence must give CL = 0, so this is easy to spot — and
+`polar.csv` already flags it with `converged=0`. If you need BCM, drop
+`CFL_NUMBER` well below the default 25 and check the CL history, not just the
+final value. `lm` does not show the problem.
+
 `python mesh.py`, `python polar.py --selftest` and `python tune_np.py --selftest`
 run the unit checks (mesh block symmetry, AoA parsing, SU2 history-CSV parsing,
 config generation, rank-choice rule). `INSTALL.sh` runs all three at the end.
