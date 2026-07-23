@@ -111,13 +111,16 @@ SURFACE_FILENAME= surface_{tag}
 """
 
 
-def parse_aoa(spec):
-    """'-4:16:2' -> inclusive range; '0,2,4' -> explicit list."""
+def parse_range(spec):
+    """'-4:16:2' -> inclusive range; '0,2,4' -> explicit list. Used for AoA and Mach."""
     if ":" in spec:
         lo, hi, step = (float(x) for x in spec.split(":"))
         n = int(round((hi - lo) / step))
         return [lo + i * step for i in range(n + 1)]
     return [float(x) for x in spec.split(",")]
+
+
+parse_aoa = parse_range  # back-compat alias
 
 
 def read_history(path):
@@ -146,7 +149,8 @@ def main():
     ap = argparse.ArgumentParser()
     ap.add_argument("--airfoil", required=True, help="name in FALCON's Selig database, or path to a .dat")
     ap.add_argument("--re", type=float, default=1e6)
-    ap.add_argument("--mach", type=float, default=0.15)
+    ap.add_argument("--mach", default="0.15", help="single value, or lo:hi:step / comma list "
+                    "to sweep Mach; each Mach gets its own mesh and subdir")
     ap.add_argument("--aoa", default="-4:16:2", help="lo:hi:step or comma list")
     ap.add_argument("--regime", choices=["inc", "comp"], default="inc")
     ap.add_argument("--np", type=int, default=None,
@@ -182,16 +186,26 @@ def main():
                   f"to measure the right number for this machine.")
 
     dat = find_dat(a.airfoil)
-    case = Path(a.outdir or ROOT / "runs" / dat.stem)
-    case.mkdir(parents=True, exist_ok=True)
+    base = Path(a.outdir or ROOT / "runs" / dat.stem)
 
     from read_airfoil import read_airfoil_coordinates
     x, y = read_airfoil_coordinates(str(dat.parent), dat.name)
 
+    machs = parse_range(a.mach)
+    for mach in machs:
+        # one mesh + sweep per Mach; the wall spacing depends on Mach, so each
+        # needs its own dir. Single Mach keeps the flat runs/<stem>/ layout.
+        case = base if len(machs) == 1 else base / f"M{mach:g}"
+        run_sweep(a, dat, x, y, mach, case)
+
+
+def run_sweep(a, dat, x, y, mach, case):
+    case.mkdir(parents=True, exist_ok=True)
+
     mesh = case / "airfoil.su2"
     if not mesh.exists():
         from mesh import generate_mesh
-        generate_mesh(x, y, a.re, a.mach, y_plus=a.yplus, path=mesh,
+        generate_mesh(x, y, a.re, mach, y_plus=a.yplus, path=mesh,
                       inlet_radius=a.farfield, downstream=max(25.0, a.farfield + 10))
     print(f"mesh: {mesh}")
 
@@ -199,8 +213,8 @@ def main():
     for aoa in parse_aoa(a.aoa):
         tag = f"{aoa:+.2f}"
         cfg = case / f"aoa_{tag}.cfg"
-        cfg.write_text(make_cfg(a.regime, aoa, a.re, a.mach, a.iters, restart, a.transition, a.tu))
-        print(f"--- AoA {aoa:g} ({a.np} ranks) ...", end=" ", flush=True)
+        cfg.write_text(make_cfg(a.regime, aoa, a.re, mach, a.iters, restart, a.transition, a.tu))
+        print(f"--- M {mach:g} AoA {aoa:g} ({a.np} ranks) ...", end=" ", flush=True)
         with open(case / f"aoa_{tag}.log", "w") as log:
             rc = subprocess.call(["mpirun", "-n", str(a.np), "SU2_CFD", cfg.name],
                                  cwd=case, stdout=log, stderr=subprocess.STDOUT)
@@ -217,7 +231,8 @@ def main():
         restart = True
 
     if not rows:
-        sys.exit("no converged runs")
+        print(f"M {mach:g}: no converged runs")
+        return
 
     csv = case / "polar.csv"
     csv.write_text("aoa,cl,cd,cm,converged\n" +
@@ -234,7 +249,7 @@ def main():
                                           (cd, cl, "CD", "CL")]):
         ax[i].plot(xs, ys, "o-")
         ax[i].set_xlabel(xl); ax[i].set_ylabel(yl); ax[i].grid(True)
-    fig.suptitle(f"{dat.stem}  Re={a.re:.3g}  M={a.mach}  ({a.regime})")
+    fig.suptitle(f"{dat.stem}  Re={a.re:.3g}  M={mach:g}  ({a.regime})")
     fig.tight_layout()
     fig.savefig(case / "polar.png", dpi=130)
     print(case / "polar.png")
@@ -244,6 +259,9 @@ def selftest():
     assert parse_aoa("-4:16:2") == [-4 + 2 * i for i in range(11)], parse_aoa("-4:16:2")
     assert parse_aoa("2,4,6") == [2.0, 4.0, 6.0]
     assert parse_aoa("0:0:1") == [0.0]
+    ms = parse_range("0.15:0.6:0.15")  # Mach sweep uses the same parser
+    assert len(ms) == 4 and abs(ms[0] - 0.15) < 1e-9 and abs(ms[-1] - 0.6) < 1e-9, ms
+    assert parse_range("0.3") == [0.3]  # single Mach still parses to a one-element list
     import tempfile
     p = Path(tempfile.mkdtemp()) / "h.csv"
     p.write_text('"Inner_Iter",       "rms[Rho]",           "CL",           "CD",          "CMz"\n'
