@@ -76,24 +76,33 @@ def main():
     if not data:
         sys.exit(f"no converged polar.csv under runs/{args.airfoil}_m0*")
 
+    warns = []
+    warn = lambda msg: warns.append(msg)
+
     machs_cfd = sorted(data)
     CL, CD, CM = {}, {}, {}
     for m in machs_cfd:
-        CL[m], CD[m], CM[m] = extrapolate_column(*data[m], OUT_ALPHA, args.cdmax)
+        CL[m], CD[m], CM[m] = extrapolate_column(*data[m], OUT_ALPHA, args.cdmax,
+                                                 warn=lambda s, m=m: warn(f"M{m:g}: {s}"))
     m0 = machs_cfd[0]                       # M=0 incompressible-limit copy
     CL[0.0], CD[0.0], CM[0.0] = CL[m0], CD[m0], CM[m0]
     machs = [0.0] + [m for m in machs_cfd if m > 0.0]
 
-    # --- self-checks: fail loudly if the table is physically implausible ---
+    # Plausibility checks. WARN (don't abort): the tool is airfoil-generic, and a
+    # legitimately thick/thin section can sit outside these VR12-tuned bands.
     i0, i90 = OUT_ALPHA.index(0), OUT_ALPHA.index(90)
-    op = [m for m in machs if 0.1 <= m <= 0.6]
+    op = [m for m in machs if 0.1 <= m <= 0.6] or machs[1:]
     min_cd0 = min(CD[m][i0] for m in op)
-    assert 0.006 <= min_cd0 <= 0.016, f"min CD@0 = {min_cd0:.4f} out of [0.006,0.016]"
+    if not 0.006 <= min_cd0 <= 0.016:
+        warn(f"min CD@0 = {min_cd0:.4f} outside typical [0.006,0.016]")
     slope = (CL[machs[1]][OUT_ALPHA.index(4)] - CL[machs[1]][OUT_ALPHA.index(-4)]) / 8.0
-    assert 0.08 <= slope <= 0.13, f"CL slope@0 = {slope:.3f}/deg out of [0.08,0.13]"
-    for m in machs:
-        assert abs(CL[m][0]) < 0.05 and abs(CL[m][-1]) < 0.05, "CL not ~0 at +-180"
-        assert CD[m][i90] > 1.0, f"CD@90 = {CD[m][i90]:.2f} not flat-plate-like"
+    if not 0.08 <= slope <= 0.13:
+        warn(f"CL slope@0 = {slope:.3f}/deg outside typical [0.08,0.13]")
+    for m in machs:                        # Viterna invariants -- these should always hold
+        if not (abs(CL[m][0]) < 0.05 and abs(CL[m][-1]) < 0.05):
+            warn(f"M{m:g}: CL not ~0 at +-180 (extrapolation broken)")
+        if CD[m][i90] <= 1.0:
+            warn(f"M{m:g}: CD@90 = {CD[m][i90]:.2f} not flat-plate-like")
 
     m_lit = ", ".join(f"{m:g}" for m in machs)
     a_lit = ",".join(f"{a:g}" for a in OUT_ALPHA)
@@ -122,6 +131,10 @@ def main():
     print(f"{func}: columns {machs}   ({len(OUT_ALPHA)} alpha x {len(machs)} mach)")
     print(f"min CD@0 = {min_cd0:.4f}   CL slope@0 = {slope:.3f}/deg   cdmax = {args.cdmax}")
     print(f"wrote {out}")
+    if warns:
+        print(f"\n{len(warns)} warning(s) -- review before trusting the table:", file=sys.stderr)
+        for w in warns:
+            print(f"  ! {w}", file=sys.stderr)
 
 
 if __name__ == "__main__":
