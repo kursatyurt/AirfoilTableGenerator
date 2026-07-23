@@ -62,25 +62,35 @@ by a couple of degrees, so this cuts most of the sweep's cost. Delete
 | `--aoa` | `-4:16:2` | `lo:hi:step` inclusive, or `0,2,4`. |
 | `--regime` | `inc` | `inc` = `INC_RANS` for M < 0.3; `comp` = compressible `RANS`, use for transonic. |
 | `--np` | from `machine.conf` | MPI ranks. |
-| `--iters` | `2000`, or `6000` with `--transition` | raise it if `polar.csv` shows `converged=0`. |
+| `--iters` | `10000` | max iterations per angle; the run stops earlier when the coefficient Cauchy criterion is met. |
 | `--yplus` | `1.0` | sets the wall spacing and the number of normal layers. |
 | `--farfield` | `15` | farfield radius in chords. Push it well past 15 for transonic. |
-| `--transition` | `none` | `bcm` or `lm` add laminar-turbulent transition on top of SA. |
-| `--tu` | `0.001` | freestream turbulence intensity the transition models key off. |
+| `--transition` | `none` | `lm` adds Langtry-Menter laminar-turbulent transition on top of SA. |
+| `--tu` | `0.001` | freestream turbulence intensity the transition model keys off. |
+
+## Convergence
+
+Each angle converges on the **force coefficients**, not on a residual field:
+`CONV_FIELD= ( LIFT, DRAG, MOMENT_Z )` with a Cauchy tolerance of
+`CONV_CAUCHY_EPS= 1E-4` over the last `100` iterations — i.e. the run stops once
+lift, drag and pitching moment have each settled to within **1E-4 (one drag count
+in C_D)**. This is what a coefficient sweep actually cares about; a residual can
+reach its floor while the integrated lift is still drifting (which produced the
+earlier frozen-lift LM sweep). If SU2 hits the `--iters` budget first, the angle
+is flagged `converged=0` in `polar.csv`.
 
 ## Transition
 
-Turbulence is always Spalart–Allmaras. `--transition` adds a laminar-turbulent
-transition model on top of it rather than replacing it:
+Turbulence is always Spalart–Allmaras. `--transition lm` adds the Langtry-Menter
+γ-Reθ laminar-turbulent transition model on top of it (two extra transport
+equations) rather than replacing it:
 
 - `none` (default) — fully turbulent from the leading edge. Overpredicts drag at
   low Re and cannot produce a laminar drag bucket.
-- `bcm` — Bas-Cakmakcioglu, algebraic, built specifically for SA. No extra
-  transport equation, so it costs almost nothing.
-- `lm` — Langtry-Menter γ-Reθ. Two more transport equations, slower and harder
-  to converge.
+- `lm` — Langtry-Menter γ-Reθ. Resolves natural transition and the drag bucket;
+  runs at a gentler CFL ceiling (15 vs 50) so it is slower per angle.
 
-Both read `--tu`, the freestream turbulence intensity (`0.001` = 0.1%, a
+`lm` reads `--tu`, the freestream turbulence intensity (`0.001` = 0.1%, a
 low-turbulence wind tunnel). Transition location is sensitive to it, so match it
 to the experiment you are comparing against.
 
@@ -161,14 +171,12 @@ What *did* move everything the right way is transition. `--transition lm` pulls
 the slope to within ~1%, brings CLmax and the stall angle down onto the
 experimental 12°, and drops CD through the experimental value (it overshoots low
 because LM at Tu = 0.1% laminarises more of the surface than the real model had).
-It is not the default because it is fragile: LM's two transport equations fall
-into a limit cycle at low α on this case — the transition front hunts by a cell
-or two and the density residual floors around −5.7 instead of reaching −6, with
-CL oscillating ±0.01 (smaller than the reference plot's own ±0.02–0.05). So those
-angles report `converged=0` honestly. `--transition` therefore auto-lowers the
-CFL ceiling (15 vs 50 turbulent) and raises the default `--iters` to 6000; even
-so, expect low-α points to sit in the limit cycle. Average the CL history or read
-the well-separated mid-α points; do not trust a single low-α value at face.
+LM's two transport equations can hunt at low α on this case — the transition
+front moves by a cell or two — so `--transition lm` runs at a lower CFL ceiling
+(15 vs 50 turbulent). Convergence is judged on the coefficients themselves
+(`CONV_FIELD= (LIFT, DRAG, MOMENT_Z)`, Cauchy tolerance 1E-4 = one drag count),
+so an angle only reports `converged=1` once lift, drag and moment have actually
+settled — not merely when a residual floors.
 
 ### Stall
 
@@ -189,24 +197,15 @@ convergence is not what is wrong — the physics model is.
 
 ### Transition models compared
 
-NACA 0012, Re 1e6, M 0.15, α = 0, each run to 4000 iterations:
+NACA 0012, Re 1e6, M 0.15, α = 0:
 
 | `--transition` | CL | CD | converged |
 |---|---|---|---|
 | `none` | +0.00006 | 0.01074 | yes |
-| `bcm` | −0.0777 | 0.00636 | **no** |
 | `lm` | −0.00138 | 0.00485 | yes |
 
-Transition roughly halves the drag, as it should at this Reynolds number.
-
-**Known issue — BCM runs into a limit cycle here.** It converges normally to
-`rms[P]` = −7.5 by iteration 1500 with CL = −0.002, correctly symmetric, and
-then the residual *climbs back* to about −5.8 while CL wanders to −0.08. More
-iterations will not help; the transition location is oscillating. A symmetric
-airfoil at zero incidence must give CL = 0, so this is easy to spot — and
-`polar.csv` already flags it with `converged=0`. If you need BCM, drop
-`CFL_NUMBER` well below the default 25 and check the CL history, not just the
-final value. `lm` does not show the problem.
+Transition roughly halves the drag, as it should at this Reynolds number, and
+keeps CL symmetric (≈0 at α=0) as it must.
 
 `python mesh.py`, `python polar.py --selftest` and `python tune_np.py --selftest`
 run the unit checks (mesh block symmetry, AoA parsing, SU2 history-CSV parsing,

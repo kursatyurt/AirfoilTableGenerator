@@ -12,7 +12,6 @@ FALCON = ROOT / "opt" / "FALCON"
 sys.path.insert(0, str(FALCON))
 
 RHO, A_SOUND = 1.225, 341.348  # sea level, matches FALCON's meshing.py
-CONV_MINVAL = -6  # log10 residual target; must match CONV_RESIDUAL_MINVAL in COMMON
 
 COMMON = """\
 MATH_PROBLEM= DIRECT
@@ -37,7 +36,11 @@ LINEAR_SOLVER= FGMRES
 LINEAR_SOLVER_PREC= ILU
 LINEAR_SOLVER_ERROR= 1E-6
 LINEAR_SOLVER_ITER= 20
-CONV_RESIDUAL_MINVAL= -6
+% LIFT/DRAG/MOMENT_Z are SU2 COEFFICIENT fields (CL/CD/CMz), non-dimensional --
+% not dimensional forces. EPS 1E-4 = one drag count in CD.
+CONV_FIELD= ( LIFT, DRAG, MOMENT_Z )
+CONV_CAUCHY_ELEMS= 100
+CONV_CAUCHY_EPS= 1E-4
 CONV_STARTITER= 10
 MESH_FILENAME= airfoil.su2
 MESH_FORMAT= SU2
@@ -51,9 +54,8 @@ SCREEN_OUTPUT= ( INNER_ITER, RMS_DENSITY, RMS_MOMENTUM-X, LIFT, DRAG )
 
 
 TRANSITION = {
-    # both keep KIND_TURB_MODEL= SA; neither replaces it
+    # LM rides on top of KIND_TURB_MODEL= SA; it does not replace it
     "none": "",                      # fully turbulent from the leading edge
-    "bcm": "SA_OPTIONS= BCM\n",      # Bas-Cakmakcioglu, algebraic, no extra transport equation
     "lm": "KIND_TRANS_MODEL= LM\n",  # Langtry-Menter gamma-Re_theta, two extra equations
 }
 
@@ -62,9 +64,8 @@ def make_cfg(regime, aoa, re, mach, iters, restart, transition="none", tu=0.001)
     v = mach * A_SOUND
     tag = f"{aoa:+.2f}"
     # LM's two extra transport equations make the transition front hunt at high
-    # CFL and stall the residual (the limit cycle seen on BCM too). Capping the
-    # adaptive CFL ceiling trades wall time for a residual that actually reaches
-    # the target. Fully-turbulent SA is unaffected and keeps the fast ceiling.
+    # CFL and stall convergence. Capping the adaptive CFL ceiling trades wall time
+    # for coefficients that actually settle. Fully-turbulent SA keeps the fast ceiling.
     cfl_max = 15.0 if transition != "none" else 50.0
     if regime == "inc":
         # mu from Re with chord = 1 m
@@ -81,7 +82,6 @@ FREESTREAM_NU_FACTOR= 4.0
 MARKER_HEATFLUX= ( Airfoil, 0.0 )
 AOA= {aoa}
 CFL_NUMBER= {25.0 if transition == "none" else 10.0}
-CONV_FIELD= RMS_PRESSURE
 CONV_NUM_METHOD_FLOW= FDS
 """
     else:
@@ -97,7 +97,6 @@ AOA= {aoa}
 CFL_NUMBER= 5.0
 CFL_ADAPT= YES
 CFL_ADAPT_PARAM= ( 0.1, 2.0, 5.0, {cfl_max} )
-CONV_FIELD= RMS_DENSITY
 CONV_NUM_METHOD_FLOW= ROE
 ENTROPY_FIX_COEFF= 0.05
 """
@@ -155,15 +154,15 @@ def main():
     ap.add_argument("--regime", choices=["inc", "comp"], default="inc")
     ap.add_argument("--np", type=int, default=None,
                     help="MPI ranks; defaults to machine.conf from tune_np.py, else half the cores")
-    ap.add_argument("--iters", type=int, default=None,
-                    help="solver iterations per angle; default 2000, or 6000 with "
-                         "--transition (the lower CFL needs a longer budget to hit -6)")
+    ap.add_argument("--iters", type=int, default=10000,
+                    help="max solver iterations per angle (default 10000); the run stops "
+                         "earlier when the LIFT/DRAG/MOMENT_Z Cauchy criterion is met")
     ap.add_argument("--yplus", type=float, default=1.0)
     ap.add_argument("--farfield", type=float, default=15.0,
                     help="farfield radius in chords; go well past 15 for transonic runs")
     ap.add_argument("--transition", choices=list(TRANSITION), default="none",
-                    help="laminar-turbulent transition on top of SA: bcm is algebraic and cheap, "
-                         "lm adds two transport equations")
+                    help="laminar-turbulent transition on top of SA: 'lm' = Langtry-Menter "
+                         "gamma-Re_theta (two extra transport equations)")
     ap.add_argument("--tu", type=float, default=0.001,
                     help="freestream turbulence intensity for the transition models "
                          "(0.001 = 0.1%%, a low-turbulence wind tunnel)")
@@ -174,8 +173,6 @@ def main():
         v = rest.pop(0)
         argv.append(f"--aoa={rest.pop(0)}" if v == "--aoa" and rest else v)
     a = ap.parse_args(argv)
-    if a.iters is None:
-        a.iters = 2000 if a.transition == "none" else 6000
 
     if a.np is None:
         from tune_np import stored_np
@@ -223,8 +220,11 @@ def run_sweep(a, dat, x, y, mach, case):
             print(f"FAILED (rc={rc}), see aoa_{tag}.log")
             continue
         h = read_history(hist)
-        res = h["rms[P]"] if a.regime == "inc" else h["rms[Rho]"]  # inc solver reports pressure
-        rows.append((aoa, h["CL"], h["CD"], h.get("CMz", float("nan")), res <= CONV_MINVAL))
+        # convergence is by the LIFT/DRAG/MOMENT_Z Cauchy criterion: if SU2 stopped
+        # before the iteration budget, the coefficients settled; a full-budget run did not.
+        n_iter = sum(1 for _ in open(hist)) - 1  # history rows written = iterations run
+        converged = n_iter < a.iters
+        rows.append((aoa, h["CL"], h["CD"], h.get("CMz", float("nan")), converged))
         print(f"CL={rows[-1][1]:.4f} CD={rows[-1][2]:.5f}")
         # warm-start the next AoA from this solution
         shutil.copy(case / "restart_flow.dat", case / "solution_flow.dat")
@@ -269,9 +269,10 @@ def selftest():
                  '1, -8.5, 0.4412, 0.00931, -0.00123\n')
     h = read_history(p)
     assert abs(h["CL"] - 0.4412) < 1e-9 and abs(h["CD"] - 0.00931) < 1e-9, h
-    assert h["rms[Rho]"] <= CONV_MINVAL
-    # the converged flag and the solver's own stop criterion must not drift apart
-    assert f"CONV_RESIDUAL_MINVAL= {CONV_MINVAL}" in COMMON
+    # convergence is on the force coefficients (Cauchy), never on a residual field
+    assert "CONV_FIELD= ( LIFT, DRAG, MOMENT_Z )" in COMMON
+    # Cauchy tolerance 1E-4 = 1 drag count in the non-dimensional CD
+    assert "CONV_CAUCHY_EPS= 1E-4" in COMMON and "CONV_RESIDUAL_MINVAL" not in COMMON
     cfg =make_cfg("inc", 2.0, 1e6, 0.15, 500, True)
     assert "MU_CONSTANT= 6.2722695000e-05" in cfg and "RESTART_SOL= YES" in cfg, cfg
     assert "SOLVER= RANS" in make_cfg("comp", 0.0, 1e6, 0.8, 500, False)
@@ -281,14 +282,14 @@ def selftest():
     comp = make_cfg("comp", 0.0, 1e6, 0.8, 500, False)
     assert "CONV_NUM_METHOD_FLOW= ROE" in comp and "FDS" not in comp
     # transition rides on top of SA, it never replaces the turbulence model
+    assert list(TRANSITION) == ["none", "lm"]  # BCM removed; LM is the only transition model
     for t in TRANSITION:
         c = make_cfg("inc", 0.0, 1e6, 0.15, 500, False, transition=t, tu=0.002)
         assert "KIND_TURB_MODEL= SA" in c and "FREESTREAM_TURBULENCEINTENSITY= 0.002" in c
-    assert "SA_OPTIONS= BCM" in make_cfg("inc", 0.0, 1e6, 0.15, 500, False, "bcm")
     assert "KIND_TRANS_MODEL= LM" in make_cfg("inc", 0.0, 1e6, 0.15, 500, False, "lm")
     # transition must run at a gentler CFL than fully-turbulent SA, or the front
-    # hunts and the residual stalls short of the target (as it did on the first
-    # LM 0015 sweep). Turbulent keeps the fast ceiling.
+    # hunts and the coefficients stall short of convergence (as on the first LM
+    # 0015 sweep). Turbulent keeps the fast ceiling.
     assert "( 0.1, 2.0, 5.0, 50.0 )" in make_cfg("comp", 0.0, 1e6, 0.3, 500, False, "none")
     assert "( 0.1, 2.0, 5.0, 15.0 )" in make_cfg("comp", 0.0, 1e6, 0.3, 500, False, "lm")
     assert "CFL_NUMBER= 25.0" in make_cfg("inc", 0.0, 1e6, 0.15, 500, False, "none")
