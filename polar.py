@@ -36,11 +36,14 @@ LINEAR_SOLVER= FGMRES
 LINEAR_SOLVER_PREC= ILU
 LINEAR_SOLVER_ERROR= 1E-6
 LINEAR_SOLVER_ITER= 20
-% LIFT/DRAG/MOMENT_Z are SU2 COEFFICIENT fields (CL/CD/CMz), non-dimensional --
-% not dimensional forces. EPS 1E-4 = one drag count in CD.
-CONV_FIELD= ( LIFT, DRAG, MOMENT_Z )
+% CONV_FIELD/SCREEN_OUTPUT are regime-specific (RMS_DENSITY comp, RMS_PRESSURE
+% inc) and appended per solver below. LIFT/DRAG/MOMENT_Z are SU2 COEFFICIENT
+% fields (CL/CD/CMz), non-dimensional -- not dimensional forces. Cauchy EPS
+% 1E-4 = one drag count in CD; RESIDUAL_MINVAL floors the residual so an angle
+% cannot report converged while CD is still oscillating on a live residual.
 CONV_CAUCHY_ELEMS= 100
 CONV_CAUCHY_EPS= 1E-4
+CONV_RESIDUAL_MINVAL= -6
 CONV_STARTITER= 10
 MESH_FILENAME= airfoil.su2
 MESH_FORMAT= SU2
@@ -49,7 +52,6 @@ RESTART_FILENAME= restart_flow.dat
 TABULAR_FORMAT= CSV
 OUTPUT_FILES= ( RESTART, PARAVIEW, SURFACE_CSV )
 HISTORY_OUTPUT= ( ITER, RMS_RES, AERO_COEFF, AOA )
-SCREEN_OUTPUT= ( INNER_ITER, RMS_DENSITY, RMS_MOMENTUM-X, LIFT, DRAG )
 """
 
 
@@ -63,6 +65,11 @@ TRANSITION = {
 def make_cfg(regime, aoa, re, mach, iters, restart, transition="none", tu=0.001):
     v = mach * A_SOUND
     tag = f"{aoa:+.2f}"
+    # Residual field is solver-specific: the compressible solver tracks density,
+    # the incompressible pressure. It joins the Cauchy coefficient fields so an
+    # angle converges only once CL/CD/CMz are Cauchy-stable AND the residual has
+    # floored (CONV_RESIDUAL_MINVAL), killing the CD oscillation.
+    res = "RMS_PRESSURE" if regime == "inc" else "RMS_DENSITY"
     # LM's two extra transport equations make the transition front hunt at high
     # CFL and stall convergence. Capping the adaptive CFL ceiling trades wall time
     # for coefficients that actually settle. Fully-turbulent SA keeps the fast ceiling.
@@ -102,6 +109,8 @@ ENTROPY_FIX_COEFF= 0.05
 LOW_MACH_PREC= YES
 """
     return head + COMMON + TRANSITION[transition] + f"""\
+CONV_FIELD= ( LIFT, DRAG, MOMENT_Z, {res} )
+SCREEN_OUTPUT= ( INNER_ITER, {res}, RMS_MOMENTUM-X, LIFT, DRAG )
 FREESTREAM_TURBULENCEINTENSITY= {tu}
 RESTART_SOL= {"YES" if restart else "NO"}
 ITER= {iters}
@@ -233,8 +242,11 @@ def run_sweep(a, dat, x, y, mach, case):
             return None
         h = read_history(hist)
         n_iter = sum(1 for _ in open(hist)) - 1  # history rows = iterations run
-        shutil.copy(restart_dat, sol)            # hand this field to the next angle
-        return h["CL"], h["CD"], h.get("CMz", float("nan")), n_iter < a.iters
+        converged = n_iter < a.iters
+        if converged:                            # only a converged field warm-starts the
+            shutil.copy(restart_dat, sol)        # next angle; a diverged one (e.g. post-
+                                                 # stall) would poison the whole march
+        return h["CL"], h["CD"], h.get("CMz", float("nan")), converged
 
     # Fan outward from the angle nearest zero lift. The near-zero angles are the hardest
     # for LM (symmetric loading -> transition front hunts); doing them first from a
@@ -315,13 +327,18 @@ def selftest():
                  '1, -8.5, 0.4412, 0.00931, -0.00123\n')
     h = read_history(p)
     assert abs(h["CL"] - 0.4412) < 1e-9 and abs(h["CD"] - 0.00931) < 1e-9, h
-    # convergence is on the force coefficients (Cauchy), never on a residual field
-    assert "CONV_FIELD= ( LIFT, DRAG, MOMENT_Z )" in COMMON
-    # Cauchy tolerance 1E-4 = 1 drag count in the non-dimensional CD
-    assert "CONV_CAUCHY_EPS= 1E-4" in COMMON and "CONV_RESIDUAL_MINVAL" not in COMMON
+    # convergence needs Cauchy-stable coefficients AND a floored residual, so the
+    # residual field joins CONV_FIELD -- but its name is solver-specific.
+    assert "CONV_CAUCHY_EPS= 1E-4" in COMMON and "CONV_RESIDUAL_MINVAL= -6" in COMMON
     cfg =make_cfg("inc", 2.0, 1e6, 0.15, 500, True)
     assert "MU_CONSTANT= 6.2722695000e-05" in cfg and "RESTART_SOL= YES" in cfg, cfg
-    assert "SOLVER= RANS" in make_cfg("comp", 0.0, 1e6, 0.8, 500, False)
+    # inc solver tracks pressure, never density -- RMS_DENSITY would abort SU2
+    assert "CONV_FIELD= ( LIFT, DRAG, MOMENT_Z, RMS_PRESSURE )" in cfg
+    assert "CONV_FIELD= ( LIFT, DRAG, MOMENT_Z, RMS_DENSITY )" not in cfg
+    comp0 = make_cfg("comp", 0.0, 1e6, 0.8, 500, False)
+    assert "CONV_FIELD= ( LIFT, DRAG, MOMENT_Z, RMS_DENSITY )" in comp0
+    assert "CONV_FIELD= ( LIFT, DRAG, MOMENT_Z, RMS_PRESSURE )" not in comp0
+    assert "SOLVER= RANS" in comp0
     # the convective scheme is solver-specific: FDS is incompressible-only, ROE
     # compressible-only, and SU2 rejects the wrong one at startup
     assert "CONV_NUM_METHOD_FLOW= FDS" in cfg and "ROE" not in cfg
