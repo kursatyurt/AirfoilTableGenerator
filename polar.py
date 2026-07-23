@@ -99,6 +99,7 @@ CFL_ADAPT= YES
 CFL_ADAPT_PARAM= ( 0.1, 2.0, 5.0, {cfl_max} )
 CONV_NUM_METHOD_FLOW= ROE
 ENTROPY_FIX_COEFF= 0.05
+LOW_MACH_PREC= YES
 """
     return head + COMMON + TRANSITION[transition] + f"""\
 FREESTREAM_TURBULENCEINTENSITY= {tu}
@@ -151,7 +152,10 @@ def main():
     ap.add_argument("--mach", default="0.15", help="single value, or lo:hi:step / comma list "
                     "to sweep Mach; each Mach gets its own mesh and subdir")
     ap.add_argument("--aoa", default="-4:16:2", help="lo:hi:step or comma list")
-    ap.add_argument("--regime", choices=["inc", "comp"], default="inc")
+    ap.add_argument("--regime", choices=["inc", "comp"], default="comp",
+                    help="comp (default) = compressible RANS with Roe + low-Mach "
+                         "preconditioning, consistent across the whole Mach sweep; "
+                         "inc = INC_RANS, only for strictly incompressible cases")
     ap.add_argument("--np", type=int, default=None,
                     help="MPI ranks; defaults to machine.conf from tune_np.py, else half the cores")
     ap.add_argument("--iters", type=int, default=10000,
@@ -323,6 +327,7 @@ def selftest():
     assert "CONV_NUM_METHOD_FLOW= FDS" in cfg and "ROE" not in cfg
     comp = make_cfg("comp", 0.0, 1e6, 0.8, 500, False)
     assert "CONV_NUM_METHOD_FLOW= ROE" in comp and "FDS" not in comp
+    assert "LOW_MACH_PREC= YES" in comp  # comp is the default; must converge at low Mach too
     # transition rides on top of SA, it never replaces the turbulence model
     assert list(TRANSITION) == ["none", "lm"]  # BCM removed; LM is the only transition model
     for t in TRANSITION:

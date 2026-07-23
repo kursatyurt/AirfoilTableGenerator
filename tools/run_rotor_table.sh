@@ -43,12 +43,10 @@ fi
 run_column() {  # $1 = Mach
   local M="$1" RE REGIME FF NN OUT LOG
   RE=$(python -c "print(f'{$M*$SOUND*$CHORD/$NU:.4g}')")
-  # inc for M<0.3, compressible otherwise; transonic wants a bigger farfield
-  if python -c "import sys; sys.exit(0 if $M<0.3 else 1)"; then
-    REGIME=inc;  FF=15
-  else
-    REGIME=comp; FF=25
-  fi
+  # compressible everywhere (Roe + low-Mach preconditioning) so every column of the
+  # C81 table is built with one consistent solver; transonic just wants a bigger farfield
+  REGIME=comp
+  if python -c "import sys; sys.exit(0 if $M<0.7 else 1)"; then FF=15; else FF=25; fi
   NN=$(python -c "print(f'{int(round($M*100)):03d}')")
   OUT="runs/${AIRFOIL}_m${NN}"
   LOG="runs/${AIRFOIL}_m${NN}.log"

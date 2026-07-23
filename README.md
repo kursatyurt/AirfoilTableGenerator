@@ -60,7 +60,7 @@ by a couple of degrees, so this cuts most of the sweep's cost. Delete
 | `--airfoil` | — | a path to a `.dat`, or a name from `opt/FALCON/Airfoil_DAT_Selig` (1624 airfoils, Selig format). Misses print near matches. |
 | `--re` / `--mach` | `1e6` / `0.15` | chord is 1 m; sets viscosity (`inc`) or the SU2 `REYNOLDS_NUMBER`/`MACH_NUMBER` (`comp`). |
 | `--aoa` | `-4:16:2` | `lo:hi:step` inclusive, or `0,2,4`. |
-| `--regime` | `inc` | `inc` = `INC_RANS` for M < 0.3; `comp` = compressible `RANS`, use for transonic. |
+| `--regime` | `comp` | `comp` = compressible `RANS` (Roe + low-Mach preconditioning), the default and consistent across a whole Mach sweep; `inc` = `INC_RANS`, only for strictly incompressible cases. |
 | `--np` | from `machine.conf` | MPI ranks. |
 | `--iters` | `10000` | max iterations per angle; the run stops earlier when the coefficient Cauchy criterion is met. |
 | `--yplus` | `1.0` | sets the wall spacing and the number of normal layers. |
