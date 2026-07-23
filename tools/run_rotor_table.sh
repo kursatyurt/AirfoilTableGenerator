@@ -8,6 +8,8 @@
 # Configure via env vars (defaults = VR12 on the UT Austin rotor):
 #   AIRFOIL=vr12  CHORD=0.08  MACHS="0.1 0.2 0.3 0.4 0.5 0.6"
 #   SOUND=340.3  NU=1.46e-5  AOA=-14:20:1  ITERS=10000  TU=0.001
+#   TRANSITION=lm      # lm = laminar drag bucket; TRANSITION=none = fully turbulent SA
+#   INC_MAX_MACH=0.25  # columns below this use the (fast) incompressible solver
 #
 # Mach columns are independent, so on a big box run them concurrently:
 #   CONCURRENT=1  -> keep SLOTS columns running at once (SLOTS from machine.conf
@@ -32,6 +34,9 @@ NU="${NU:-1.46e-5}"
 AOA="${AOA:--14:20:1}"
 ITERS="${ITERS:-10000}"
 TU="${TU:-0.001}"
+TRANSITION="${TRANSITION:-lm}"          # lm (resolves the laminar drag bucket) or none (fully turbulent)
+INC_MAX_MACH="${INC_MAX_MACH:-0.25}"    # M below this uses INC_RANS: no acoustic stiffness,
+                                        # so it converges fast where compressible Roe crawls
 CONCURRENT="${CONCURRENT:-0}"
 NP="${NP:-$(conf NP)}"; NP="${NP:-4}"                 # tuned ranks/column, else 4
 if [ "$CONCURRENT" = 1 ]; then
@@ -43,17 +48,23 @@ fi
 run_column() {  # $1 = Mach
   local M="$1" RE REGIME FF NN OUT LOG
   RE=$(python -c "print(f'{$M*$SOUND*$CHORD/$NU:.4g}')")
-  # compressible everywhere (Roe + low-Mach preconditioning) so every column of the
-  # C81 table is built with one consistent solver; transonic just wants a bigger farfield
-  REGIME=comp
-  if python -c "import sys; sys.exit(0 if $M<0.7 else 1)"; then FF=15; else FF=25; fi
+  # Compressible (Roe + low-Mach preconditioning) keeps the table on one solver,
+  # but a density-based solve is stiff as M->0 and crawls; below INC_MAX_MACH use
+  # INC_RANS instead -- no acoustic stiffness, fast and accurate there. The seam
+  # sits inboard at low dynamic pressure, so its effect on rotor power is tiny.
+  if python -c "import sys; sys.exit(0 if $M<$INC_MAX_MACH else 1)"; then
+    REGIME=inc;  FF=15
+  else
+    REGIME=comp
+    if python -c "import sys; sys.exit(0 if $M<0.7 else 1)"; then FF=15; else FF=25; fi
+  fi
   NN=$(python -c "print(f'{int(round($M*100)):03d}')")
   OUT="runs/${AIRFOIL}_m${NN}"
   LOG="runs/${AIRFOIL}_m${NN}.log"
   {
-    echo "=== $OUT  M$M Re$RE $REGIME np$NP  $(date) ==="
+    echo "=== $OUT  M$M Re$RE $REGIME $TRANSITION np$NP  $(date) ==="
     python polar.py --airfoil "$AIRFOIL" --mach "$M" --re "$RE" --aoa "$AOA" \
-      --transition lm --regime "$REGIME" --farfield "$FF" --np "$NP" \
+      --transition "$TRANSITION" --regime "$REGIME" --farfield "$FF" --np "$NP" \
       --iters "$ITERS" --tu "$TU" --outdir "$OUT"
     echo "=== $OUT DONE $(date) exit=$? ==="
   } &>> "$LOG"
