@@ -10,17 +10,19 @@
 #   SOUND=340.3  NU=1.46e-5  AOA=-14:20:1  ITERS=10000  TU=0.001
 #
 # Mach columns are independent, so on a big box run them concurrently:
-#   CONCURRENT=1  -> background every column and wait (NP defaults to 12, so
-#                    6 columns fill ~72 cores; warm-starts stay intact within a
-#                    column). A single 2D solve stops scaling past ~1-2 dozen
-#                    ranks, so throughput comes from concurrent columns, not
-#                    bigger NP -- see the machine.conf study in the README.
-#   default (CONCURRENT=0) -> one column at a time (NP defaults to 4); safe for
-#                    a laptop or a background-job wall-clock budget.
-# Override NP to change ranks-per-column.  Usage:  bash tools/run_rotor_table.sh
+#   CONCURRENT=1  -> keep SLOTS columns running at once (SLOTS from machine.conf
+#                    = cores/NP, so the box fills without oversubscribing on any
+#                    machine). Warm-starts stay intact within a column. A single
+#                    2D solve stops scaling past ~1-2 dozen ranks, so throughput
+#                    comes from concurrent columns, not bigger NP.
+#   default (CONCURRENT=0) -> one column at a time.
+# NP / CORES / SLOTS default to the tuned machine.conf (run tune_np.py once);
+# any of NP, SLOTS, CORES can be overridden by env.  Usage: bash tools/run_rotor_table.sh
 set -euo pipefail
 cd "$(dirname "$0")/.."
 source env.sh
+
+conf() { [ -f machine.conf ] && grep -E "^$1=" machine.conf | tail -1 | cut -d= -f2 | tr -d ' '; }
 
 AIRFOIL="${AIRFOIL:-vr12}"
 CHORD="${CHORD:-0.08}"
@@ -31,7 +33,12 @@ AOA="${AOA:--14:20:1}"
 ITERS="${ITERS:-10000}"
 TU="${TU:-0.001}"
 CONCURRENT="${CONCURRENT:-0}"
-NP="${NP:-$([ "$CONCURRENT" = 1 ] && echo 12 || echo 4)}"
+NP="${NP:-$(conf NP)}"; NP="${NP:-4}"                 # tuned ranks/column, else 4
+if [ "$CONCURRENT" = 1 ]; then
+  SLOTS="${SLOTS:-$(conf SLOTS)}"; SLOTS="${SLOTS:-1}" # tuned concurrent columns
+else
+  SLOTS=1
+fi
 
 run_column() {  # $1 = Mach
   local M="$1" RE REGIME FF NN OUT LOG
@@ -54,12 +61,17 @@ run_column() {  # $1 = Mach
   } &>> "$LOG"
 }
 
+echo "sweep: $AIRFOIL  columns[$MACHS]  np=$NP  slots=$SLOTS"
+# ponytail: FIFO window (wait on the oldest), not a greedy wait -n scheduler --
+# columns are similar length, and this stays portable to bash 3.2 (macOS).
+pids=()
 for M in $MACHS; do
-  if [ "$CONCURRENT" = 1 ]; then
-    run_column "$M" &
-  else
-    run_column "$M"
+  run_column "$M" &
+  pids+=("$!")
+  if [ "${#pids[@]}" -ge "$SLOTS" ]; then
+    wait "${pids[0]}"
+    pids=("${pids[@]:1}")
   fi
 done
-[ "$CONCURRENT" = 1 ] && wait || true
+wait
 echo "all columns done ($AIRFOIL): $MACHS"

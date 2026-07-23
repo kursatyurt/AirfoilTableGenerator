@@ -97,9 +97,17 @@ def main():
     # Prefer fewer ranks when the extra ones barely help: anything within 10% of
     # the best time counts as "as fast", so take the cheapest of those.
     pick = min((r for r in results if r[1] <= best[1] * (1 + a.tolerance)), key=lambda r: r[0])
-    CONF.write_text(f"# written by tune_np.py -- delete to re-tune\nNP={pick[0]}\n")
+    # SLOTS = how many independent solves fill the box at NP ranks each. The Mach
+    # columns of a sweep are independent, so run_rotor_table.sh runs SLOTS of them
+    # at once -- machine-independent throughput without oversubscribing.
+    slots = max(1, cores // pick[0])
+    CONF.write_text("# written by tune_np.py -- delete to re-tune\n"
+                    f"NP={pick[0]}\n"
+                    f"CORES={cores}\n"
+                    f"SLOTS={slots}\n")
     print(f"\nfastest: {best[0]} ranks ({best[1]:.1f}s)")
-    print(f"chose:   {pick[0]} ranks ({pick[1]:.1f}s) -> {CONF}")
+    print(f"chose:   {pick[0]} ranks ({pick[1]:.1f}s), {cores} cores -> "
+          f"{slots} concurrent columns -> {CONF}")
 
 
 def _selftest():
