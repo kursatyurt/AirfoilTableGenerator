@@ -59,6 +59,7 @@ run_column() {  # $1 = Mach
   } &>> "$LOG"
 }
 
+mkdir -p runs   # each column redirects its log to runs/<name>.log before polar.py runs
 echo "sweep: $AIRFOIL  columns[$MACHS]  np=$NP  slots=$SLOTS"
 # ponytail: FIFO window (wait on the oldest), not a greedy wait -n scheduler --
 # columns are similar length, and this stays portable to bash 3.2 (macOS).
