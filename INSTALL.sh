@@ -68,7 +68,7 @@ EOF
 # ---- verify ---------------------------------------------------------------
 echo "==> verifying"
 # shellcheck disable=SC1091
-source env.sh
+source ./env.sh
 command -v SU2_CFD >/dev/null || { echo "SU2_CFD not on PATH after install" >&2; exit 1; }
 python -c "import gmsh, numpy, scipy, pandas, matplotlib, read_airfoil" \
   || { echo "python imports failed" >&2; exit 1; }
