@@ -61,6 +61,11 @@ TRANSITION = {
 def make_cfg(regime, aoa, re, mach, iters, restart, transition="none", tu=0.001):
     v = mach * A_SOUND
     tag = f"{aoa:+.2f}"
+    # LM's two extra transport equations make the transition front hunt at high
+    # CFL and stall the residual (the limit cycle seen on BCM too). Capping the
+    # adaptive CFL ceiling trades wall time for a residual that actually reaches
+    # the target. Fully-turbulent SA is unaffected and keeps the fast ceiling.
+    cfl_max = 15.0 if transition != "none" else 50.0
     if regime == "inc":
         # mu from Re with chord = 1 m
         mu = RHO * v * 1.0 / re
@@ -75,7 +80,7 @@ MU_CONSTANT= {mu:.10e}
 FREESTREAM_NU_FACTOR= 4.0
 MARKER_HEATFLUX= ( Airfoil, 0.0 )
 AOA= {aoa}
-CFL_NUMBER= 25.0
+CFL_NUMBER= {25.0 if transition == "none" else 10.0}
 CONV_FIELD= RMS_PRESSURE
 CONV_NUM_METHOD_FLOW= FDS
 """
@@ -91,7 +96,7 @@ MARKER_HEATFLUX= ( Airfoil, 0.0 )
 AOA= {aoa}
 CFL_NUMBER= 5.0
 CFL_ADAPT= YES
-CFL_ADAPT_PARAM= ( 0.1, 2.0, 5.0, 50.0 )
+CFL_ADAPT_PARAM= ( 0.1, 2.0, 5.0, {cfl_max} )
 CONV_FIELD= RMS_DENSITY
 CONV_NUM_METHOD_FLOW= ROE
 ENTROPY_FIX_COEFF= 0.05
@@ -146,7 +151,9 @@ def main():
     ap.add_argument("--regime", choices=["inc", "comp"], default="inc")
     ap.add_argument("--np", type=int, default=None,
                     help="MPI ranks; defaults to machine.conf from tune_np.py, else half the cores")
-    ap.add_argument("--iters", type=int, default=2000)
+    ap.add_argument("--iters", type=int, default=None,
+                    help="solver iterations per angle; default 2000, or 6000 with "
+                         "--transition (the lower CFL needs a longer budget to hit -6)")
     ap.add_argument("--yplus", type=float, default=1.0)
     ap.add_argument("--farfield", type=float, default=15.0,
                     help="farfield radius in chords; go well past 15 for transonic runs")
@@ -163,6 +170,8 @@ def main():
         v = rest.pop(0)
         argv.append(f"--aoa={rest.pop(0)}" if v == "--aoa" and rest else v)
     a = ap.parse_args(argv)
+    if a.iters is None:
+        a.iters = 2000 if a.transition == "none" else 6000
 
     if a.np is None:
         from tune_np import stored_np
@@ -259,6 +268,13 @@ def selftest():
         assert "KIND_TURB_MODEL= SA" in c and "FREESTREAM_TURBULENCEINTENSITY= 0.002" in c
     assert "SA_OPTIONS= BCM" in make_cfg("inc", 0.0, 1e6, 0.15, 500, False, "bcm")
     assert "KIND_TRANS_MODEL= LM" in make_cfg("inc", 0.0, 1e6, 0.15, 500, False, "lm")
+    # transition must run at a gentler CFL than fully-turbulent SA, or the front
+    # hunts and the residual stalls short of the target (as it did on the first
+    # LM 0015 sweep). Turbulent keeps the fast ceiling.
+    assert "( 0.1, 2.0, 5.0, 50.0 )" in make_cfg("comp", 0.0, 1e6, 0.3, 500, False, "none")
+    assert "( 0.1, 2.0, 5.0, 15.0 )" in make_cfg("comp", 0.0, 1e6, 0.3, 500, False, "lm")
+    assert "CFL_NUMBER= 25.0" in make_cfg("inc", 0.0, 1e6, 0.15, 500, False, "none")
+    assert "CFL_NUMBER= 10.0" in make_cfg("inc", 0.0, 1e6, 0.15, 500, False, "lm")
     print("selftest ok")
 
 

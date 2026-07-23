@@ -62,7 +62,7 @@ by a couple of degrees, so this cuts most of the sweep's cost. Delete
 | `--aoa` | `-4:16:2` | `lo:hi:step` inclusive, or `0,2,4`. |
 | `--regime` | `inc` | `inc` = `INC_RANS` for M < 0.3; `comp` = compressible `RANS`, use for transonic. |
 | `--np` | from `machine.conf` | MPI ranks. |
-| `--iters` | `2000` | raise it if `polar.csv` shows `converged=0`. |
+| `--iters` | `2000`, or `6000` with `--transition` | raise it if `polar.csv` shows `converged=0`. |
 | `--yplus` | `1.0` | sets the wall spacing and the number of normal layers. |
 | `--farfield` | `15` | farfield radius in chords. Push it well past 15 for transonic. |
 | `--transition` | `none` | `bcm` or `lm` add laminar-turbulent transition on top of SA. |
@@ -120,6 +120,55 @@ within one study. Both compressible cases reached the `-6` convergence
 target only marginally (M 0.8 at −5.1 still misses it); transonic
 especially needs more `--iters` and a farfield much larger than the 15-chord
 default.
+
+### NACA 0015 against experiment (Ames 1×3.5 ft tunnel, 1945)
+
+Validated against NACA Report 832 / the Army Datcom sheet — M 0.30, Re 1.5e6,
+compressible, α = 0:16:2. `validate.py` does the comparison and reports CL slope,
+zero-lift angle, CLmax, CD at cl = 0.22 (the one drag point figure 32 resolves),
+and a CM symmetry check:
+
+```
+python validate.py runs/naca0015_M030/polar.csv reference/naca0015_cl_alpha_M030.csv 0.30
+```
+
+| quantity | fully turbulent | `--transition lm` | experiment |
+|---|---|---|---|
+| lift slope /deg | 0.1056 (+5.4%) | ~0.099 (−1%) | 0.1002 |
+| CD at cl = 0.22 | 0.0117 (+50%) | 0.0061 (−22%) | 0.0078 |
+| CLmax | 1.30 at 14° | 1.16 at 12° | 1.08 at 12° |
+| CM at α = 0 | −0.0005 | −0.0005 | 0 (symmetry) |
+
+The fully-turbulent run is the trustworthy one — every angle converges to
+`rms[Rho] = -6`. It sits **+5.4% high on lift slope** and **+50% high on drag**,
+both the expected sign: fully turbulent from the leading edge, against a 1945
+tunnel model that carried a long laminar run, and with no wind-tunnel-wall or
+blockage correction applied to the reference. Turbulent skin friction alone is
+~0.012 at this Re, which is essentially the computed CD, so that drag is a
+physics-of-the-model result, not a mesh or convergence artefact.
+
+Three things were tested as possible fixes for the +5.4% and **none helped** —
+recorded here so they are not re-tried:
+
+- **Farfield.** 15 → 30 chords made the slope *worse* (+5.4% → +7.6%), the
+  opposite of the confinement argument. `--farfield 15` stays the default.
+- **Grid.** 81k → 115k → 190k cells moved the slope inside a ±0.4% band,
+  non-monotonically — grid-converged. The default 401/301/180 mesh is adequate.
+- **Wall spacing.** y+ 1.0 → 0.5 moved both slope and CD *further* from
+  experiment, confirming the CD is a turbulence-model ceiling. y+ = 1.0 stays.
+
+What *did* move everything the right way is transition. `--transition lm` pulls
+the slope to within ~1%, brings CLmax and the stall angle down onto the
+experimental 12°, and drops CD through the experimental value (it overshoots low
+because LM at Tu = 0.1% laminarises more of the surface than the real model had).
+It is not the default because it is fragile: LM's two transport equations fall
+into a limit cycle at low α on this case — the transition front hunts by a cell
+or two and the density residual floors around −5.7 instead of reaching −6, with
+CL oscillating ±0.01 (smaller than the reference plot's own ±0.02–0.05). So those
+angles report `converged=0` honestly. `--transition` therefore auto-lowers the
+CFL ceiling (15 vs 50 turbulent) and raises the default `--iters` to 6000; even
+so, expect low-α points to sit in the limit cycle. Average the CL history or read
+the well-separated mid-α points; do not trust a single low-α value at face.
 
 ### Stall
 

@@ -1,7 +1,7 @@
 #!/usr/bin/env python
 """Compare a computed polar against a digitised experimental reference.
 
-    python validate.py runs/naca0015_M030/polar.csv reference/naca0015_cl_alpha_M030.csv
+    python validate.py runs/naca0015_M030/polar.csv reference/naca0015_cl_alpha_M030.csv 0.30
 
 Reports the lift-slope and zero-lift angle from both, the point-by-point CL
 difference over the linear range, and CLmax with the angle it occurs at.
@@ -39,7 +39,54 @@ def interp(pts, x):
     return None
 
 
-def main(computed, reference):
+def check_cd(computed, mach, cl_ref=0.22):
+    """CD against TR-832 figure 32, which reports cd only at |cl| = 0.22.
+
+    The experiment gives one number per Mach, not a polar, so the computed
+    drag is interpolated to the same cl rather than compared angle by angle.
+    """
+    rows = read_csv(computed, "cl", "cd")
+    cd = interp(sorted(rows), cl_ref)
+    # fig42_lo/hi are blank for the Mach numbers figure 42 does not cover
+    num = lambda v: float(v) if v.strip() else None
+    ref = {float(r["mach"]): (float(r["cd"]), num(r["fig42_lo"]), num(r["fig42_hi"]))
+           for r in _rows(ROOT / "reference" / "naca0015_cd_vs_mach_tr832.csv")}
+    exp = ref.get(round(mach, 3))
+    print(f"\nCD at cl = {cl_ref}")
+    if cd is None:
+        print(f"  computed polar does not reach cl = {cl_ref}")
+        return
+    if exp is None:
+        print(f"  computed {cd:.5f}; no TR-832 row for M = {mach}")
+        return
+    print(f"  computed {cd:.5f}   TR-832 fig 32 {exp[0]:.5f}   "
+          f"{100 * (cd - exp[0]) / exp[0]:+.1f}%")
+    if exp[1] is not None:
+        print(f"  fig 42 envelope for the five sections at cl=0.20: {exp[1]:.4f}-{exp[2]:.4f}")
+    print("  fully turbulent SU2 vs a partly laminar 1945 tunnel: computed should run high")
+
+
+def check_cm(computed):
+    """CM has no experimental reference -- see reference/README.md.
+
+    Figure 37's baselines were resolved, but the digitised curves failed the
+    cm(cl=0) = 0 symmetry test by about -0.04 per curve, which no common
+    offset removes, so no moment data was recorded. Only symmetry is checkable.
+    """
+    pts = read_csv(computed, "aoa", "cm")
+    cm0 = interp(pts, 0.0) if pts[0][0] != 0.0 else pts[0][1]
+    print(f"\nCM: no experimental reference exists (TR-832 fig 37 rejected, see "
+          f"reference/README.md)")
+    print(f"  symmetry check, cm at alpha=0: {cm0:+.5f}  (must be 0)")
+    assert abs(cm0) < 0.005, f"cm({0}) = {cm0}, symmetry broken -- mesh or markers"
+
+
+def _rows(path):
+    with open(path) as f:
+        return list(csv.DictReader(l for l in f if not l.startswith("#")))
+
+
+def main(computed, reference, mach=None):
     cfd = read_csv(computed, "aoa", "cl")
     exp = read_csv(reference, "alpha_deg", "cl")
     print(f"computed:  {computed}  ({len(cfd)} points)")
@@ -64,6 +111,9 @@ def main(computed, reference):
     if diffs:
         print(f"\nmean |dCL| = {sum(diffs) / len(diffs):.4f}, max |dCL| = {max(diffs):.4f}")
         print("reference is digitised from a plot: roughly +/-0.02 CL of its own uncertainty")
+    if mach is not None:
+        check_cd(computed, mach)
+    check_cm(computed)
 
 
 def _selftest():
@@ -75,6 +125,22 @@ def _selftest():
     shifted = [(x, y + 0.1) for x, y in pts]        # +0.1 offset -> -1 deg zero-lift
     a, a0 = lift_slope(shifted, lo=0, hi=8)
     assert abs(a0 + 1.0) < 1e-9, a0
+    # the TR-832 drag row must survive being read back, since check_cd keys on Mach
+    # every row must parse, not just M=0.30: fig42_lo/hi are blank for 0.550 and 0.625
+    r = {float(x["mach"]): x for x in _rows(ROOT / "reference" / "naca0015_cd_vs_mach_tr832.csv")}
+    assert abs(float(r[0.3]["cd"]) - 0.0078) < 1e-9, r[0.3]
+    assert not r[0.55]["fig42_lo"].strip(), "expected a blank fig42 column to exercise"
+    import tempfile
+    p = Path(tempfile.mkdtemp()) / "polar.csv"
+    p.write_text("aoa,cl,cd,cm,converged\n0,0.0,0.010,0.0,1\n4,0.44,0.012,-0.004,1\n")
+    check_cm(p)                                    # symmetric case must pass
+    p.write_text("aoa,cl,cd,cm,converged\n0,0.0,0.010,-0.05,1\n4,0.44,0.012,-0.06,1\n")
+    try:
+        check_cm(p)
+    except AssertionError:
+        pass
+    else:
+        raise AssertionError("check_cm accepted a non-zero cm at alpha=0")
     print("validate selftest ok")
 
 
@@ -82,4 +148,5 @@ if __name__ == "__main__":
     if "--selftest" in sys.argv:
         _selftest()
     else:
-        main(sys.argv[1], sys.argv[2])
+        main(sys.argv[1], sys.argv[2],
+             float(sys.argv[3]) if len(sys.argv) > 3 else None)
