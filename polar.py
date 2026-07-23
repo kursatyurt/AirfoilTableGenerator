@@ -206,30 +206,72 @@ def run_sweep(a, dat, x, y, mach, case):
                       inlet_radius=a.farfield, downstream=max(25.0, a.farfield + 10))
     print(f"mesh: {mesh}")
 
-    rows, restart = [], False
-    for aoa in parse_aoa(a.aoa):
+    sol, restart_dat = case / "solution_flow.dat", case / "restart_flow.dat"
+
+    def su2(cfg_name, log_name):
+        with open(case / log_name, "w") as log:
+            return subprocess.call(["mpirun", "-n", str(a.np), "SU2_CFD", cfg_name],
+                                   cwd=case, stdout=log, stderr=subprocess.STDOUT)
+
+    def solve(aoa, restart, transition, suffix="", tu=None):
+        """Run one angle; return (CL, CD, CMz, converged) or None. Leaves the
+        converged field in solution_flow.dat for the next (warm-started) angle."""
         tag = f"{aoa:+.2f}"
-        cfg = case / f"aoa_{tag}.cfg"
-        cfg.write_text(make_cfg(a.regime, aoa, a.re, mach, a.iters, restart, a.transition, a.tu))
-        print(f"--- M {mach:g} AoA {aoa:g} ({a.np} ranks) ...", end=" ", flush=True)
-        with open(case / f"aoa_{tag}.log", "w") as log:
-            rc = subprocess.call(["mpirun", "-n", str(a.np), "SU2_CFD", cfg.name],
-                                 cwd=case, stdout=log, stderr=subprocess.STDOUT)
+        cfg = case / f"aoa_{tag}{suffix}.cfg"
+        cfg.write_text(make_cfg(a.regime, aoa, a.re, mach, a.iters, restart, transition,
+                                a.tu if tu is None else tu))
+        label = " turbulent seed" if suffix == "_seed" else ""
+        print(f"--- M {mach:g} AoA {aoa:g}{label} ({a.np} ranks) ...", end=" ", flush=True)
+        rc = su2(cfg.name, f"aoa_{tag}{suffix}.log")
         hist = case / f"history_{tag}.csv"
         if rc != 0 or not hist.exists():
-            print(f"FAILED (rc={rc}), see aoa_{tag}.log")
-            continue
+            print(f"FAILED (rc={rc}), see aoa_{tag}{suffix}.log")
+            return None
         h = read_history(hist)
-        # convergence is by the LIFT/DRAG/MOMENT_Z Cauchy criterion: if SU2 stopped
-        # before the iteration budget, the coefficients settled; a full-budget run did not.
-        n_iter = sum(1 for _ in open(hist)) - 1  # history rows written = iterations run
-        converged = n_iter < a.iters
-        rows.append((aoa, h["CL"], h["CD"], h.get("CMz", float("nan")), converged))
-        print(f"CL={rows[-1][1]:.4f} CD={rows[-1][2]:.5f}")
-        # warm-start the next AoA from this solution
-        shutil.copy(case / "restart_flow.dat", case / "solution_flow.dat")
-        restart = True
+        n_iter = sum(1 for _ in open(hist)) - 1  # history rows = iterations run
+        shutil.copy(restart_dat, sol)            # hand this field to the next angle
+        return h["CL"], h["CD"], h.get("CMz", float("nan")), n_iter < a.iters
 
+    # Fan outward from the angle nearest zero lift. The near-zero angles are the hardest
+    # for LM (symmetric loading -> transition front hunts); doing them first from a
+    # fully-turbulent seed, then marching into progressively more asymmetric (and stabler)
+    # incidences with 1-deg warm-started steps, avoids the cold -4 deg start and the long
+    # cold-transient. Each branch (up from the pivot, then down) is monotonic in AoA.
+    angles = parse_aoa(a.aoa)
+    pivot = min(angles, key=abs)
+    up = sorted(x for x in angles if x >= pivot)
+    down = sorted((x for x in angles if x < pivot), reverse=True)
+
+    rows = {}
+
+    def record(aoa, r):
+        if r:
+            rows[aoa] = r
+            print(f"CL={r[0]:.4f} CD={r[1]:.5f}" + ("" if r[3] else "  [not converged]"))
+
+    # pivot: seed with the SAME transition solver but at high freestream turbulence
+    # (SEED_TU), which drives gamma->1 so it converges fast and stable like a fully-
+    # turbulent solve. Restarting the real low-Tu LM run from it is variable-compatible
+    # (same solver) -- unlike seeding from plain SA, which lacks LM's transition
+    # variables and makes SU2 diverge (NaN) on the mismatched restart.
+    SEED_TU = 0.10
+    seeded = False
+    if a.transition != "none":
+        if solve(pivot, False, a.transition, "_seed", tu=SEED_TU):
+            seeded = True
+    record(pivot, solve(pivot, seeded, a.transition))
+    pivot_sol = case / "solution_flow.pivot.dat"
+    if sol.exists():
+        shutil.copy(sol, pivot_sol)  # save the pivot field to reseed the down branch
+
+    for aoa in up[1:]:               # ascending above the pivot, warm-started
+        record(aoa, solve(aoa, True, a.transition))
+    if down and pivot_sol.exists():
+        shutil.copy(pivot_sol, sol)  # rewind to the pivot field before fanning down
+    for aoa in down:                 # descending below the pivot, warm-started
+        record(aoa, solve(aoa, True, a.transition))
+
+    rows = [(aoa, *rows[aoa]) for aoa in sorted(rows)]
     if not rows:
         print(f"M {mach:g}: no converged runs")
         return
