@@ -61,7 +61,7 @@ the mesh rather than silently reusing a stale one.
 | `--airfoil` | — | a path to a `.dat`, or a name from `opt/FALCON/Airfoil_DAT_Selig` (1624 airfoils, Selig format). Misses print near matches. |
 | `--re` / `--mach` | `1e6` / `0.15` | chord is 1 m; sets viscosity (`inc`) or the SU2 `REYNOLDS_NUMBER`/`MACH_NUMBER` (`comp`). |
 | `--aoa` | `-4:16:2` | `lo:hi:step` inclusive, or `0,2,4`. |
-| `--regime` | `auto` | `auto` uses INC_RANS below M=0.3 and compressible RANS otherwise; `inc` or `comp` forces a regime. |
+| `--regime` | `auto` | `auto` uses INC_RANS below M=0.25 and compressible RANS otherwise; `inc` or `comp` forces a regime. |
 | `--np` | from `machine.conf` | MPI ranks. |
 | `--iters` | `10000` | max iterations per angle; the run stops earlier when the coefficient Cauchy criterion is met. |
 | `--yplus` | `1.0` | maximum target y+; wall spacing is derived from the requested Reynolds number and normal layers are added until it is met. |
