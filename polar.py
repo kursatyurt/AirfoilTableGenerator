@@ -4,14 +4,20 @@
     source env.sh
     python polar.py --airfoil naca0012 --re 1e6 --mach 0.15 --aoa -4:16:2 --np 8
 """
-import argparse, math, os, shutil, subprocess, sys
+import argparse, hashlib, json, math, os, shutil, subprocess, sys
 from pathlib import Path
+
+import pandas as pd
 
 ROOT = Path(__file__).resolve().parent
 FALCON = ROOT / "opt" / "FALCON"
 sys.path.insert(0, str(FALCON))
 
 RHO, A_SOUND = 1.225, 341.348  # sea level, matches FALCON's meshing.py
+INC_MAX_MACH = 0.3
+LIFT_COUNT = 0.002
+DRAG_COUNT = 0.0001
+MESH_CACHE_VERSION = 1
 
 
 def auto_farfield(mach):
@@ -29,6 +35,34 @@ def auto_downstream(farfield, mach):
     """Return the outlet location in chords, ramping the wake only when needed."""
     wake_target = min(75.0, 35.0 + 200.0 * max(0.0, mach - 0.1))
     return max(wake_target, farfield + 10.0)
+
+
+def regime_for(mach, requested):
+    return requested if requested != "auto" else ("inc" if mach < INC_MAX_MACH else "comp")
+
+
+def file_hash(path):
+    return hashlib.sha256(Path(path).read_bytes()).hexdigest()
+
+
+def mesh_spec(dat, re, mach, yplus, farfield):
+    return {"version": MESH_CACHE_VERSION, "airfoil_sha256": file_hash(dat), "re": re,
+            "mach": mach, "yplus": yplus, "farfield": farfield,
+            "downstream": auto_downstream(farfield, mach)}
+
+
+def ensure_mesh(mesh, spec, x, y):
+    meta = mesh.with_suffix(".mesh.json")
+    if mesh.exists() and meta.exists():
+        try:
+            if json.loads(meta.read_text()) == spec:
+                return
+        except json.JSONDecodeError:
+            pass
+    from mesh import generate_mesh
+    generate_mesh(x, y, spec["re"], spec["mach"], y_plus=spec["yplus"], path=mesh,
+                  inlet_radius=spec["farfield"], downstream=spec["downstream"])
+    meta.write_text(json.dumps(spec, indent=2, sort_keys=True) + "\n")
 
 
 COMMON = """\
@@ -187,10 +221,21 @@ def past_stall(extreme_cl, cl, direction, drop):
 
 def read_history(path):
     """Last row of an SU2 history CSV -> {CL, CD, CMz, ...}. Headers are quoted+padded."""
-    import pandas as pd
     df = pd.read_csv(path)
     df.columns = [c.strip().strip('"').strip() for c in df.columns]
     return df.iloc[-1].to_dict()
+
+
+def urans_stationary(path):
+    """True when means from the last two physical-force windows agree in counts."""
+    df = pd.read_csv(path)
+    df.columns = [c.strip().strip('"').strip() for c in df.columns]
+    if len(df) < 20 or not {"CL", "CD"}.issubset(df.columns):
+        return False
+    tail = df.iloc[len(df) // 2:]
+    first, second = tail.iloc[:len(tail) // 2], tail.iloc[len(tail) // 2:]
+    return (abs(first["CL"].mean() - second["CL"].mean()) <= LIFT_COUNT and
+            abs(first["CD"].mean() - second["CD"].mean()) <= DRAG_COUNT)
 
 
 def find_dat(name):
@@ -207,6 +252,49 @@ def find_dat(name):
              + (f"\ndid you mean: {', '.join(near)}" if near else ""))
 
 
+def calibrate_farfield(a, dat, x, y, mach, regime, case, reference_aoa):
+    """Find and cache the smallest domain stable to the next 10c radius."""
+    identity = {"version": MESH_CACHE_VERSION, "airfoil_sha256": file_hash(dat), "re": a.re,
+                "mach": mach, "regime": regime, "yplus": a.yplus, "transition": a.transition,
+                "tu": a.tu, "reference_aoa": reference_aoa}
+    cache = case / "mesh_calibration.json"
+    try:
+        saved = json.loads(cache.read_text())
+        if saved.get("identity") == identity:
+            return saved["farfield"]
+    except (FileNotFoundError, json.JSONDecodeError, KeyError):
+        pass
+
+    root = case / "mesh_calibration"
+    radius = auto_farfield(mach)
+    for _ in range(10):
+        results = []
+        for candidate in (radius, radius + 10.0):
+            probe = root / f"r{candidate:g}"
+            probe.mkdir(parents=True, exist_ok=True)
+            ensure_mesh(probe / "airfoil.su2", mesh_spec(dat, a.re, mach, a.yplus, candidate), x, y)
+            cfg = make_cfg(regime, reference_aoa, a.re, mach, a.iters, False, a.transition, a.tu)
+            (probe / "probe.cfg").write_text(cfg.replace("OUTPUT_FILES= ( RESTART, PARAVIEW, SURFACE_CSV )",
+                                                           "OUTPUT_FILES= ( RESTART )"))
+            with open(probe / "probe.log", "w") as log:
+                rc = subprocess.call(["mpirun", "-n", str(a.np), "SU2_CFD", "probe.cfg"], cwd=probe,
+                                     stdout=log, stderr=subprocess.STDOUT)
+            hist = probe / f"history_{reference_aoa:+.2f}.csv"
+            if rc != 0 or not hist.exists():
+                raise RuntimeError(f"mesh calibration failed at M={mach:g}, radius={candidate:g}c")
+            h = read_history(hist)
+            n_iter = sum(1 for _ in open(hist)) - 1
+            if n_iter >= a.iters:
+                raise RuntimeError(f"mesh calibration did not converge at M={mach:g}, radius={candidate:g}c")
+            results.append(h)
+        if abs(results[0]["CL"] - results[1]["CL"]) <= LIFT_COUNT and abs(results[0]["CD"] - results[1]["CD"]) <= DRAG_COUNT:
+            cache.write_text(json.dumps({"identity": identity, "farfield": radius}, indent=2, sort_keys=True) + "\n")
+            print(f"mesh calibration: M={mach:g}, AoA={reference_aoa:g}, farfield={radius:g}c")
+            return radius
+        radius += 10.0
+    raise RuntimeError(f"mesh calibration exceeded 10 radius increments at M={mach:g}")
+
+
 def main():
     ap = argparse.ArgumentParser()
     ap.add_argument("--airfoil", required=True, help="name in FALCON's Selig database, or path to a .dat")
@@ -214,10 +302,9 @@ def main():
     ap.add_argument("--mach", default="0.15", help="single value, or lo:hi:step / comma list "
                     "to sweep Mach; each Mach gets its own mesh and subdir")
     ap.add_argument("--aoa", default="-4:16:2", help="lo:hi:step or comma list")
-    ap.add_argument("--regime", choices=["inc", "comp"], default="comp",
-                    help="comp (default) = compressible RANS with Roe + low-Mach "
-                         "preconditioning, consistent across the whole Mach sweep; "
-                         "inc = INC_RANS, only for strictly incompressible cases")
+    ap.add_argument("--regime", choices=["auto", "inc", "comp"], default="auto",
+                    help="auto (default) uses INC_RANS below M=0.3 and compressible RANS above; "
+                         "inc or comp forces one regime")
     ap.add_argument("--np", type=int, default=None,
                     help="MPI ranks; defaults to machine.conf from tune_np.py, else half the cores")
     ap.add_argument("--iters", type=int, default=10000,
@@ -275,19 +362,18 @@ def main():
         # one mesh + sweep per Mach; the wall spacing depends on Mach, so each
         # needs its own dir. Single Mach keeps the flat runs/<stem>/ layout.
         case = base if len(machs) == 1 else base / f"M{mach:g}"
-        run_sweep(a, dat, x, y, mach, case)
+        run_sweep(a, dat, x, y, mach, case, regime_for(mach, a.regime))
 
 
-def run_sweep(a, dat, x, y, mach, case):
+def run_sweep(a, dat, x, y, mach, case, regime):
     case.mkdir(parents=True, exist_ok=True)
-    farfield = a.farfield if a.farfield is not None else auto_farfield(mach)
+    reference_aoa = min(parse_aoa(a.aoa), key=lambda aoa: abs(aoa - 4.0))
+    farfield = (a.farfield if a.farfield is not None else
+                calibrate_farfield(a, dat, x, y, mach, regime, case, reference_aoa))
 
     mesh = case / "airfoil.su2"
-    if not mesh.exists():
-        from mesh import generate_mesh
-        generate_mesh(x, y, a.re, mach, y_plus=a.yplus, path=mesh,
-                      inlet_radius=farfield, downstream=auto_downstream(farfield, mach))
-    print(f"mesh: {mesh} (farfield {farfield:g}c)")
+    ensure_mesh(mesh, mesh_spec(dat, a.re, mach, a.yplus, farfield), x, y)
+    print(f"mesh: {mesh} ({regime}, farfield {farfield:g}c)")
 
     sol, restart_dat = case / "solution_flow.dat", case / "restart_flow.dat"
 
@@ -301,19 +387,27 @@ def run_sweep(a, dat, x, y, mach, case):
         converged field in solution_flow.dat for the next (warm-started) angle."""
         tag = f"{aoa:+.2f}{'_urans' if unsteady else ''}"
         cfg = case / f"aoa_{tag}{suffix}.cfg"
-        cfg.write_text(make_cfg(a.regime, aoa, a.re, mach, a.iters, restart, transition,
-                                a.tu if tu is None else tu, "_urans" if unsteady else "", unsteady,
-                                a.urans_steps_per_chord, a.urans_convective_times, a.urans_inner_iters))
         label = " URANS" if unsteady else (" turbulent seed" if suffix == "_seed" else "")
         print(f"--- M {mach:g} AoA {aoa:g}{label} ({a.np} ranks) ...", end=" ", flush=True)
-        rc = su2(cfg.name, f"aoa_{tag}{suffix}.log")
-        hist = case / f"history_{tag}.csv"
-        if rc != 0 or not hist.exists():
-            print(f"FAILED (rc={rc}), see aoa_{tag}{suffix}.log")
-            return None
-        h = read_history(hist)
-        n_iter = sum(1 for _ in open(hist)) - 1  # history rows = iterations run
-        converged = unsteady or n_iter < a.iters
+        duration, h, n_iter, converged = a.urans_convective_times, None, 0, False
+        for attempt in range(3 if unsteady else 1):
+            cfg.write_text(make_cfg(regime, aoa, a.re, mach, a.iters, restart, transition,
+                                    a.tu if tu is None else tu, "_urans" if unsteady else "", unsteady,
+                                    a.urans_steps_per_chord, duration, a.urans_inner_iters))
+            rc = su2(cfg.name, f"aoa_{tag}{suffix}{'_extend' + str(attempt) if attempt else ''}.log")
+            hist = case / f"history_{tag}.csv"
+            if rc != 0 or not hist.exists():
+                print(f"FAILED (rc={rc}), see aoa_{tag}{suffix}.log")
+                return None
+            h = read_history(hist)
+            n_iter = sum(1 for _ in open(hist)) - 1
+            converged = n_iter < a.iters if not unsteady else urans_stationary(hist)
+            if converged:
+                break
+            print(f"URANS average still drifting; extending to {duration * 1.5:g} transit times", end="; ")
+            if restart_dat.exists():
+                shutil.copy(restart_dat, sol)
+            restart, duration = True, duration * 1.5
         if converged:                            # only a converged field warm-starts the
             shutil.copy(restart_dat, sol)        # next angle; a diverged one (e.g. post-
                                                  # stall) would poison the whole march
@@ -398,7 +492,7 @@ def run_sweep(a, dat, x, y, mach, case):
                                           (cd, cl, "CD", "CL")]):
         ax[i].plot(xs, ys, "o-")
         ax[i].set_xlabel(xl); ax[i].set_ylabel(yl); ax[i].grid(True)
-    fig.suptitle(f"{dat.stem}  Re={a.re:.3g}  M={mach:g}  ({a.regime})")
+    fig.suptitle(f"{dat.stem}  Re={a.re:.3g}  M={mach:g}  ({regime})")
     fig.tight_layout()
     fig.savefig(case / "polar.png", dpi=130)
     print(case / "polar.png")
@@ -425,6 +519,12 @@ def selftest():
                  '1, -8.5, 0.4412, 0.00931, -0.00123\n')
     h = read_history(p)
     assert abs(h["CL"] - 0.4412) < 1e-9 and abs(h["CD"] - 0.00931) < 1e-9, h
+    p.write_text('"CL","CD"\n' + '0.400,0.01000\n0.401,0.01001\n' * 10)
+    assert urans_stationary(p)
+    assert regime_for(0.1, "auto") == "inc" and regime_for(0.3, "auto") == "comp"
+    foil = p.with_name("foil.dat")
+    foil.write_text("foil\n0 0\n1 0\n")
+    assert mesh_spec(foil, 1e6, 0.3, 1.0, 25.0) != mesh_spec(foil, 1e6, 0.3, 1.0, 35.0)
     # Coefficients and the regime-specific residual must all converge.
     assert "CONV_CAUCHY_ELEMS= 100" in COMMON and "CONV_CAUCHY_EPS= 1E-5" in COMMON
     assert "CONV_RESIDUAL_MINVAL= -6" in COMMON

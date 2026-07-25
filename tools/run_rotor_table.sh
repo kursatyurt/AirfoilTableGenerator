@@ -12,9 +12,9 @@ Usage:
   URANS_CONVECTIVE_TIMES=... URANS_INNER_ITERS=... bash tools/run_rotor_table.sh
 
 Re(M) is calculated as M * SOUND * CHORD / NU. Columns below INC_MAX_MACH use
-INC_RANS; higher columns use compressible RANS. Farfield radius is automatically
-sized from Mach (25c minimum, 35c at M=0.5). Set optional FARFIELD=... to use a
-fixed radius for a deliberate mesh-domain study; REGIME=inc|comp overrides regime selection.
+INC_RANS; higher columns use compressible RANS. polar.py calibrates and caches
+the farfield once per airfoil/Mach. Set optional FARFIELD=... to use a fixed
+radius for a deliberate mesh-domain study; REGIME=inc|comp overrides regime selection.
 EOF
 }
 
@@ -27,10 +27,16 @@ if [ -n "${REGIME:-}" ]; then
 fi
 
 source env.sh
+cores=$(python -c 'import os; print(os.cpu_count() or 1)')
+if (( NP * SLOTS > cores )); then
+  echo "NP * SLOTS exceeds available logical cores ($NP * $SLOTS > $cores)" >&2
+  exit 2
+fi
 mkdir -p "$OUTROOT"
 
 run_column() {  # $1 = Mach
-  local m="$1" re regime farfield nn out log
+  local m="$1" re regime nn out log
+  local -a farfield_arg=()
   re=$(python -c "print(f'{$m*$SOUND*$CHORD/$NU:.4g}')")
   if [ -n "${REGIME:-}" ]; then
     regime=$REGIME
@@ -40,17 +46,15 @@ run_column() {  # $1 = Mach
     regime=comp
   fi
   if [ -n "${FARFIELD:-}" ]; then
-    farfield=$FARFIELD
-  else
-    farfield=$(python -c "print(max(25.0, 25.0 + 50.0 * ($m - 0.3)))")
+    farfield_arg=(--farfield "$FARFIELD")
   fi
   nn=$(python -c "print(f'{int(round($m*100)):03d}')")
   out="$OUTROOT/${AIRFOIL}_m${nn}"
   log="$OUTROOT/${AIRFOIL}_m${nn}.log"
   {
-    echo "=== $out M$m Re$re $regime $TRANSITION farfield${farfield}c np$NP $(date) ==="
+    echo "=== $out M$m Re$re $regime $TRANSITION np$NP $(date) ==="
     python polar.py --airfoil "$AIRFOIL" --mach "$m" --re "$re" --aoa "$AOA" \
-      --regime "$regime" --np "$NP" --iters "$ITERS" --yplus "$YPLUS" --farfield "$farfield" \
+      --regime "$regime" --np "$NP" --iters "$ITERS" --yplus "$YPLUS" "${farfield_arg[@]}" \
       --transition "$TRANSITION" --tu "$TU" --outdir "$out" --stall-drop "$STALL_DROP" \
       --urans-steps-per-chord "$URANS_STEPS_PER_CHORD" \
       --urans-convective-times "$URANS_CONVECTIVE_TIMES" \

@@ -50,8 +50,9 @@ the practical minimum and the study starts there.
 Each angle restarts from the previous angle's converged flow field
 (`restart_flow.dat` is copied to `solution_flow.dat` and `RESTART_SOL=YES` is
 set), so only the first point of a sweep starts cold. Neighbouring angles differ
-by a couple of degrees, so this cuts most of the sweep's cost. Delete
-`runs/<airfoil>/` to start over from scratch, including the mesh.
+by a couple of degrees, so this cuts most of the sweep's cost. Mesh metadata
+records its airfoil hash and operating conditions, so changing them regenerates
+the mesh rather than silently reusing a stale one.
 
 ## Options
 
@@ -60,11 +61,11 @@ by a couple of degrees, so this cuts most of the sweep's cost. Delete
 | `--airfoil` | — | a path to a `.dat`, or a name from `opt/FALCON/Airfoil_DAT_Selig` (1624 airfoils, Selig format). Misses print near matches. |
 | `--re` / `--mach` | `1e6` / `0.15` | chord is 1 m; sets viscosity (`inc`) or the SU2 `REYNOLDS_NUMBER`/`MACH_NUMBER` (`comp`). |
 | `--aoa` | `-4:16:2` | `lo:hi:step` inclusive, or `0,2,4`. |
-| `--regime` | `comp` | `comp` = compressible `RANS` (Roe + low-Mach preconditioning), the default and consistent across a whole Mach sweep; `inc` = `INC_RANS`, only for strictly incompressible cases. |
+| `--regime` | `auto` | `auto` uses INC_RANS below M=0.3 and compressible RANS otherwise; `inc` or `comp` forces a regime. |
 | `--np` | from `machine.conf` | MPI ranks. |
 | `--iters` | `10000` | max iterations per angle; the run stops earlier when the coefficient Cauchy criterion is met. |
 | `--yplus` | `1.0` | maximum target y+; wall spacing is derived from the requested Reynolds number and normal layers are added until it is met. |
-| `--farfield` | automatic | optional radius in chords. Automatic sizing is 25c through M=0.3, 35c at M=0.5, and grows with Mach. The wake outlet ramps from 35c at M=0.1 to 75c at M=0.3; only override radius for a domain study. |
+| `--farfield` | automatic | optional fixed radius in chords. Otherwise one reference-AoA radius check is cached per airfoil/Mach and the selected mesh is reused for every table angle. |
 | `--transition` | `none` | `lm` adds Langtry-Menter laminar-turbulent transition on top of SA. |
 | `--tu` | `0.001` | freestream turbulence intensity the transition model keys off. |
 
@@ -85,9 +86,10 @@ conservative CFL limit.
 By default,
 an AoA branch detects stall when CL drops 0.02 below its branch peak, then
 switches every remaining requested AoA on that branch from steady RANS to
-second-order dual-time URANS. Each value is the force average after the initial
-transient. The default resolves 200 physical steps per chord transit time for
-10 transit times, discarding the first 40%; tune with
+second-order dual-time URANS. Each value is accepted only after the means of
+the final two force windows agree within two lift counts and one drag count;
+otherwise the run extends its physical averaging window. The default resolves
+200 physical steps per chord transit time for 10 transit times, discarding the first 40%; tune with
 `--urans-steps-per-chord`, `--urans-convective-times`, and
 `--urans-inner-iters`. Use `--stall-drop 0` to keep the complete branch steady.
 URANS uses second-order dual time, centered JST (compressible) or LD2
