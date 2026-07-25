@@ -1,82 +1,68 @@
 #!/usr/bin/env bash
-# Whole-table CFD sweep for a rotor section: one SU2 lm polar per Mach column,
-# each at its rotor-coupled Reynolds number, then build_c81.py + Viterna assemble
-# the +-180 C81 table. Generic over airfoil and blade chord.
-#
-#   Re(M) = M * SOUND * CHORD / NU     (fixed-RPM rotor: Re and Mach are coupled)
-#
-# Configure via env vars (defaults = VR12 on the UT Austin rotor):
-#   AIRFOIL=vr12  CHORD=0.08  MACHS="0.1 0.2 0.3 0.4 0.5 0.6"
-#   SOUND=340.3  NU=1.46e-5  AOA=-14:20:1  ITERS=10000  TU=0.001
-#   TRANSITION=lm      # lm = laminar drag bucket; TRANSITION=none = fully turbulent SA
-#   INC_MAX_MACH=0.25  # columns below this use the (fast) incompressible solver
-#
-# Mach columns are independent, so on a big box run them concurrently:
-#   CONCURRENT=1  -> keep SLOTS columns running at once (SLOTS from machine.conf
-#                    = cores/NP, so the box fills without oversubscribing on any
-#                    machine). Warm-starts stay intact within a column. A single
-#                    2D solve stops scaling past ~1-2 dozen ranks, so throughput
-#                    comes from concurrent columns, not bigger NP.
-#   default (CONCURRENT=0) -> one column at a time.
-# NP / CORES / SLOTS default to the tuned machine.conf (run tune_np.py once);
-# any of NP, SLOTS, CORES can be overridden by env.  Usage: bash tools/run_rotor_table.sh
+# Whole-table rotor sweep. Numerical/mesh choices are automatic unless overridden.
 set -euo pipefail
 cd "$(dirname "$0")/.."
-source env.sh
 
-conf() { [ -f machine.conf ] && grep -E "^$1=" machine.conf | tail -1 | cut -d= -f2 | tr -d ' '; }
+usage() {
+  cat <<'EOF'
+Usage:
+  AIRFOIL=... CHORD=... MACHS="..." SOUND=... NU=... AOA=... ITERS=... \
+  TU=... TRANSITION=none|lm INC_MAX_MACH=... YPLUS=... NP=... \
+  SLOTS=... OUTROOT=... STALL_DROP=... URANS_STEPS_PER_CHORD=... \
+  URANS_CONVECTIVE_TIMES=... URANS_INNER_ITERS=... bash tools/run_rotor_table.sh
 
-AIRFOIL="${AIRFOIL:-vr12}"
-CHORD="${CHORD:-0.08}"
-MACHS="${MACHS:-0.1 0.2 0.3 0.4 0.5 0.6}"
-SOUND="${SOUND:-340.3}"
-NU="${NU:-1.46e-5}"
-AOA="${AOA:--14:20:1}"
-ITERS="${ITERS:-10000}"
-TU="${TU:-0.001}"
-TRANSITION="${TRANSITION:-lm}"          # lm (resolves the laminar drag bucket) or none (fully turbulent)
-INC_MAX_MACH="${INC_MAX_MACH:-0.25}"    # M below this uses INC_RANS: no acoustic stiffness,
-                                        # so it converges fast where compressible Roe crawls
-CONCURRENT="${CONCURRENT:-0}"
-NP="${NP:-$(conf NP)}"; NP="${NP:-4}"                 # tuned ranks/column, else 4
-if [ "$CONCURRENT" = 1 ]; then
-  SLOTS="${SLOTS:-$(conf SLOTS)}"; SLOTS="${SLOTS:-1}" # tuned concurrent columns
-else
-  SLOTS=1
-fi
-
-run_column() {  # $1 = Mach
-  local M="$1" RE REGIME FF NN OUT LOG
-  RE=$(python -c "print(f'{$M*$SOUND*$CHORD/$NU:.4g}')")
-  # Compressible (Roe + low-Mach preconditioning) keeps the table on one solver,
-  # but a density-based solve is stiff as M->0 and crawls; below INC_MAX_MACH use
-  # INC_RANS instead -- no acoustic stiffness, fast and accurate there. The seam
-  # sits inboard at low dynamic pressure, so its effect on rotor power is tiny.
-  if python -c "import sys; sys.exit(0 if $M<$INC_MAX_MACH else 1)"; then
-    REGIME=inc;  FF=15
-  else
-    REGIME=comp
-    if python -c "import sys; sys.exit(0 if $M<0.7 else 1)"; then FF=15; else FF=25; fi
-  fi
-  NN=$(python -c "print(f'{int(round($M*100)):03d}')")
-  OUT="runs/${AIRFOIL}_m${NN}"
-  LOG="runs/${AIRFOIL}_m${NN}.log"
-  {
-    echo "=== $OUT  M$M Re$RE $REGIME $TRANSITION np$NP  $(date) ==="
-    python polar.py --airfoil "$AIRFOIL" --mach "$M" --re "$RE" --aoa "$AOA" \
-      --transition "$TRANSITION" --regime "$REGIME" --farfield "$FF" --np "$NP" \
-      --iters "$ITERS" --tu "$TU" --outdir "$OUT"
-    echo "=== $OUT DONE $(date) exit=$? ==="
-  } &>> "$LOG"
+Re(M) is calculated as M * SOUND * CHORD / NU. Columns below INC_MAX_MACH use
+INC_RANS; higher columns use compressible RANS. Farfield radius is automatically
+sized from Mach (25c minimum, 35c at M=0.5). Set optional FARFIELD=... to use a
+fixed radius for a deliberate mesh-domain study; REGIME=inc|comp overrides regime selection.
+EOF
 }
 
-mkdir -p runs   # each column redirects its log to runs/<name>.log before polar.py runs
-echo "sweep: $AIRFOIL  columns[$MACHS]  np=$NP  slots=$SLOTS"
-# ponytail: FIFO window (wait on the oldest), not a greedy wait -n scheduler --
-# columns are similar length, and this stays portable to bash 3.2 (macOS).
+require() { [ -n "${!1:-}" ] || { echo "missing required environment variable: $1" >&2; usage >&2; exit 2; }; }
+if [ "${1:-}" = "--help" ]; then usage; exit 0; fi
+for v in AIRFOIL CHORD MACHS SOUND NU AOA ITERS TU TRANSITION INC_MAX_MACH YPLUS NP SLOTS OUTROOT \
+         STALL_DROP URANS_STEPS_PER_CHORD URANS_CONVECTIVE_TIMES URANS_INNER_ITERS; do require "$v"; done
+if [ -n "${REGIME:-}" ]; then
+  case "$REGIME" in inc|comp) ;; *) echo "REGIME must be inc or comp" >&2; exit 2;; esac
+fi
+
+source env.sh
+mkdir -p "$OUTROOT"
+
+run_column() {  # $1 = Mach
+  local m="$1" re regime farfield nn out log
+  re=$(python -c "print(f'{$m*$SOUND*$CHORD/$NU:.4g}')")
+  if [ -n "${REGIME:-}" ]; then
+    regime=$REGIME
+  elif python -c "import sys; sys.exit(0 if $m < $INC_MAX_MACH else 1)"; then
+    regime=inc
+  else
+    regime=comp
+  fi
+  if [ -n "${FARFIELD:-}" ]; then
+    farfield=$FARFIELD
+  else
+    farfield=$(python -c "print(max(25.0, 25.0 + 50.0 * ($m - 0.3)))")
+  fi
+  nn=$(python -c "print(f'{int(round($m*100)):03d}')")
+  out="$OUTROOT/${AIRFOIL}_m${nn}"
+  log="$OUTROOT/${AIRFOIL}_m${nn}.log"
+  {
+    echo "=== $out M$m Re$re $regime $TRANSITION farfield${farfield}c np$NP $(date) ==="
+    python polar.py --airfoil "$AIRFOIL" --mach "$m" --re "$re" --aoa "$AOA" \
+      --regime "$regime" --np "$NP" --iters "$ITERS" --yplus "$YPLUS" --farfield "$farfield" \
+      --transition "$TRANSITION" --tu "$TU" --outdir "$out" --stall-drop "$STALL_DROP" \
+      --urans-steps-per-chord "$URANS_STEPS_PER_CHORD" \
+      --urans-convective-times "$URANS_CONVECTIVE_TIMES" \
+      --urans-inner-iters "$URANS_INNER_ITERS"
+    echo "=== $out DONE $(date) ==="
+  } &>> "$log"
+}
+
+echo "sweep: $AIRFOIL columns[$MACHS] regime=${REGIME:-auto@$INC_MAX_MACH} np=$NP slots=$SLOTS"
 pids=()
-for M in $MACHS; do
-  run_column "$M" &
+for m in $MACHS; do
+  run_column "$m" &
   pids+=("$!")
   if [ "${#pids[@]}" -ge "$SLOTS" ]; then
     wait "${pids[0]}"
@@ -84,4 +70,4 @@ for M in $MACHS; do
   fi
 done
 wait
-echo "all columns done ($AIRFOIL): $MACHS"
+echo "all columns done: $AIRFOIL $MACHS"

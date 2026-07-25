@@ -66,7 +66,7 @@ def main():
     # No convergence exit, so every run does exactly the same work.
     cfg = case / "tune.cfg"
     cfg.write_text(make_cfg("inc", 0.0, 1e6, 0.15, a.iters, False)
-                   .replace("CONV_RESIDUAL_MINVAL= -8", "CONV_RESIDUAL_MINVAL= -99")
+                   .replace("CONV_STARTITER= 100", f"CONV_STARTITER= {a.iters + 1}")
                    .replace("OUTPUT_FILES= ( RESTART, PARAVIEW, SURFACE_CSV )", "OUTPUT_FILES= ( RESTART )"))
 
     print(f"{cores} cores detected; {a.iters} iterations x {a.repeats} repeats per rank count\n")

@@ -63,21 +63,36 @@ by a couple of degrees, so this cuts most of the sweep's cost. Delete
 | `--regime` | `comp` | `comp` = compressible `RANS` (Roe + low-Mach preconditioning), the default and consistent across a whole Mach sweep; `inc` = `INC_RANS`, only for strictly incompressible cases. |
 | `--np` | from `machine.conf` | MPI ranks. |
 | `--iters` | `10000` | max iterations per angle; the run stops earlier when the coefficient Cauchy criterion is met. |
-| `--yplus` | `1.0` | sets the wall spacing and the number of normal layers. |
-| `--farfield` | `15` | farfield radius in chords. Push it well past 15 for transonic. |
+| `--yplus` | `1.0` | maximum target y+; wall spacing is derived from the requested Reynolds number and normal layers are added until it is met. |
+| `--farfield` | automatic | optional radius in chords. Automatic sizing is 25c through M=0.3, 35c at M=0.5, and grows with Mach. The wake outlet ramps from 35c at M=0.1 to 75c at M=0.3; only override radius for a domain study. |
 | `--transition` | `none` | `lm` adds Langtry-Menter laminar-turbulent transition on top of SA. |
 | `--tu` | `0.001` | freestream turbulence intensity the transition model keys off. |
 
 ## Convergence
 
-Each angle converges on the **force coefficients**, not on a residual field:
-`CONV_FIELD= ( LIFT, DRAG, MOMENT_Z )` with a Cauchy tolerance of
-`CONV_CAUCHY_EPS= 1E-4` over the last `100` iterations — i.e. the run stops once
-lift, drag and pitching moment have each settled to within **1E-4 (one drag count
-in C_D)**. This is what a coefficient sweep actually cares about; a residual can
-reach its floor while the integrated lift is still drifting (which produced the
-earlier frozen-lift LM sweep). If SU2 hits the `--iters` budget first, the angle
-is flagged `converged=0` in `polar.csv`.
+Each angle converges on both the **force coefficients** and the residual floor:
+`CONV_FIELD= ( LIFT, DRAG, MOMENT_Z, RMS_... )`, with a `1E-5` Cauchy tolerance
+over the last `100` iterations and `rms < -6`. The residual tail is deliberate:
+it damps the remaining CD oscillation after the force coefficients look settled.
+If SU2 hits the `--iters` budget first, the angle is flagged `converged=0` in
+`polar.csv`.
+
+Pre-stall, incompressible RANS uses second-order FDS with an adaptive 10→100 CFL
+ramp; compressible RANS uses second-order Roe with low-Mach preconditioning and
+an adaptive ceiling of 75. Both use first-order SA transport and 15-iteration
+FGMRES/ILU linear solves at 1E-6 tolerance, while LM transition retains its
+conservative CFL limit.
+By default,
+an AoA branch detects stall when CL drops 0.02 below its branch peak, then
+switches every remaining requested AoA on that branch from steady RANS to
+second-order dual-time URANS. Each value is the force average after the initial
+transient. The default resolves 200 physical steps per chord transit time for
+10 transit times, discarding the first 40%; tune with
+`--urans-steps-per-chord`, `--urans-convective-times`, and
+`--urans-inner-iters`. Use `--stall-drop 0` to keep the complete branch steady.
+URANS uses second-order dual time, centered JST (compressible) or LD2
+(incompressible) flow fluxes, and first-order upwind SA transport to limit
+artificial damping of the separated wake.
 
 ## Transition
 
@@ -128,8 +143,7 @@ incompressible one gives 0.0107 — an 8% gap at conditions where the two should
 very nearly agree, most likely the ROE vs FDS dissipation, so do not mix regimes
 within one study. Both compressible cases reached the `-6` convergence
 target only marginally (M 0.8 at −5.1 still misses it); transonic
-especially needs more `--iters` and a farfield much larger than the 15-chord
-default.
+especially needs more `--iters`; the automatic farfield increases with Mach.
 
 ### NACA 0015 against experiment (Ames 1×3.5 ft tunnel, 1945)
 
@@ -161,11 +175,17 @@ Three things were tested as possible fixes for the +5.4% and **none helped** —
 recorded here so they are not re-tried:
 
 - **Farfield.** 15 → 30 chords made the slope *worse* (+5.4% → +7.6%), the
-  opposite of the confinement argument. `--farfield 15` stays the default.
+  opposite of the confinement argument. The current automatic radius is a
+  conservative mesh-quality choice, not a correction for this model bias.
 - **Grid.** 81k → 115k → 190k cells moved the slope inside a ±0.4% band,
   non-monotonically — grid-converged. The default 401/301/180 mesh is adequate.
 - **Wall spacing.** y+ 1.0 → 0.5 moved both slope and CD *further* from
   experiment, confirming the CD is a turbulence-model ceiling. y+ = 1.0 stays.
+
+Mesh generation verifies every quadrilateral after writing. It rejects inverted
+or severely skewed cells and prints the minimum scaled-corner quality; a NACA
+4415 cambered mesh at y+ = 1 has a minimum quality of 0.860. This catches the
+cambered-airfoil block failures before SU2 is launched.
 
 What *did* move everything the right way is transition. `--transition lm` pulls
 the slope to within ~1%, brings CLmax and the stall angle down onto the
@@ -174,9 +194,9 @@ because LM at Tu = 0.1% laminarises more of the surface than the real model had)
 LM's two transport equations can hunt at low α on this case — the transition
 front moves by a cell or two — so `--transition lm` runs at a lower CFL ceiling
 (15 vs 50 turbulent). Convergence is judged on the coefficients themselves
-(`CONV_FIELD= (LIFT, DRAG, MOMENT_Z)`, Cauchy tolerance 1E-4 = one drag count),
-so an angle only reports `converged=1` once lift, drag and moment have actually
-settled — not merely when a residual floors.
+(`CONV_FIELD= (LIFT, DRAG, MOMENT_Z, RMS_...)`, Cauchy tolerance 1E-5 and
+residual floor −6), so an angle only reports `converged=1` once lift, drag and
+moment have settled and the CD-damping residual tail has completed.
 
 ### Stall
 
@@ -215,8 +235,9 @@ config generation, rank-choice rule). `INSTALL.sh` runs all three at the end.
 
 XFOIL cross-checks, CST/PARSEC parametrisation, and shape optimisation — those
 live in FALCON's GUI. Mesh independence has not been studied: the defaults are
-401 chordwise / 301 wake / 180 leading-edge nodes with a 15-chord farfield, all
-exposed as keyword arguments on `mesh.generate_mesh`.
+401 chordwise / 301 wake / 180 leading-edge nodes. `polar.py` automatically
+selects a 25c-or-larger farfield and a Mach-scaled outlet; mesh dimensions remain exposed as keyword
+arguments on `mesh.generate_mesh`.
 
 ## License
 

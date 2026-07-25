@@ -17,11 +17,50 @@ RHO, MU, A_SOUND = 1.225, 1.813e-5, 341.348  # sea-level air
 
 
 def first_cell_thickness(Re, M, y_plus=1.0):
-    """Wall spacing for a target y+, from a flat-plate skin-friction correlation."""
+    """Maximum wall spacing for a target y+, consistent with the requested Re.
+
+    SU2 derives viscosity from ``REYNOLDS_NUMBER`` (or the INC_RANS viscosity
+    generated in polar.py).  Using a fixed sea-level viscosity here silently
+    produced a much smaller y+ at most Mach numbers.  With chord = 1 m,
+    ``nu = U/Re`` and ``u_tau = U*sqrt(Cf/2)``, so velocity cancels exactly.
+    """
+    if Re <= 10 or y_plus <= 0:
+        raise ValueError("Re must exceed 10 and y_plus must be positive")
     cf = (2 * np.log10(float(Re)) - 0.65) ** -2.3
-    tau_w = cf * 0.5 * RHO * (float(M) * A_SOUND) ** 2
-    u_star = np.sqrt(tau_w / RHO)
-    return y_plus * MU / (RHO * u_star)
+    return float(y_plus) / (float(Re) * np.sqrt(cf / 2.0))
+
+
+def _normal_layer_nodes(length, first_height, growth):
+    """Nodes needed so the first transfinite normal cell is no larger than target."""
+    if growth <= 1.0:
+        raise ValueError("normal-layer growth must exceed 1")
+    cells = max(1, math.ceil(math.log1p(length * (growth - 1) / first_height) /
+                             math.log(growth)))
+    return cells + 1
+
+
+def _min_corner_quality(path):
+    """Return the minimum signed-corner quality of SU2 quadrilaterals (1 is square)."""
+    lines = open(path).read().splitlines()
+    n_elem = int(lines[1].split("=")[1])
+    quads = [tuple(map(int, line.split()[1:5])) for line in lines[2:2 + n_elem]
+             if line.split()[0] == "9"]
+    start = 2 + n_elem
+    while not lines[start].startswith("NPOIN="):
+        start += 1
+    n_point = int(lines[start].split("=")[1])
+    points = [tuple(map(float, line.split()[:2])) for line in lines[start + 1:start + 1 + n_point]]
+
+    def quality(quad):
+        p = [points[i] for i in quad]
+        corners = []
+        for i in range(4):
+            a, b, c = p[(i - 1) % 4], p[i], p[(i + 1) % 4]
+            ux, uy, vx, vy = a[0] - b[0], a[1] - b[1], c[0] - b[0], c[1] - b[1]
+            corners.append(-(ux * vy - uy * vx) / math.hypot(ux, uy) / math.hypot(vx, vy))
+        return min(corners)
+
+    return min(map(quality, quads))
 
 
 def _split(x, y, x_split):
@@ -51,9 +90,8 @@ def generate_mesh(xcoords, ycoords, Re, M, y_plus=1.0, path="airfoil.su2",
     te_growth = 1.015
 
     dy = first_cell_thickness(Re, M, y_plus)
-    log_arg = (inlet_radius * (growth - 1) / dy) + 1
-    n_volume = int(math.log(log_arg) / math.log(growth)) if log_arg > 1 else 120
-    print(f"y+={y_plus} -> first cell {dy:.4e} m, {n_volume} normal layers at growth {growth}")
+    n_volume = _normal_layer_nodes(inlet_radius, dy, growth)
+    print(f"y+<={y_plus} -> first cell <= {dy:.4e} m, {n_volume - 1} normal cells at growth {growth}")
 
     upper_pts, le_pts, lower_pts = _split(np.asarray(xcoords), np.asarray(ycoords), x_split)
 
@@ -152,6 +190,10 @@ def generate_mesh(xcoords, ycoords, Re, M, y_plus=1.0, path="airfoil.su2",
     text = open(path).read().splitlines(keepends=True)
     with open(path, "w") as f:
         f.writelines("NMARK= 3\n" if l.startswith("NMARK") else l for l in text)
+    quality = _min_corner_quality(path)
+    if quality <= 0.1:
+        raise RuntimeError(f"mesh quality too low ({quality:.3f}); refine the airfoil geometry or block settings")
+    print(f"mesh minimum scaled corner quality: {quality:.3f}")
     return path
 
 
@@ -169,6 +211,8 @@ def _selftest():
     assert np.allclose([p[1] for p in le], [-p[1] for p in le[::-1]])
     assert up[-1] == le[0] and le[-1] == lo[0]     # blocks share junctions
     assert 1e-6 < first_cell_thickness(1e6, 0.15) < 1e-4
+    assert first_cell_thickness(1e6, 0.05) == first_cell_thickness(1e6, 0.8)
+    assert _normal_layer_nodes(15.0, first_cell_thickness(1e6, 0.15), 1.2) > 2
     print("mesh selftest ok")
 
 
