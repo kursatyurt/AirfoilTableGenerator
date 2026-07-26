@@ -444,6 +444,11 @@ def run_sweep(a, dat, x, y, mach, case, regime):
 
     rows = {}
 
+    def save_checkpoint(path, data):
+        temporary = path.with_suffix(path.suffix + ".tmp")
+        temporary.write_text(json.dumps(data))
+        temporary.replace(path)
+
     def record(aoa, r):
         if r:
             rows[aoa] = r
@@ -454,40 +459,91 @@ def run_sweep(a, dat, x, y, mach, case, regime):
     # turbulent solve. Restarting the real low-Tu LM run from it is variable-compatible
     # (same solver) -- unlike seeding from plain SA, which lacks LM's transition
     # variables and makes SU2 diverge (NaN) on the mismatched restart.
-    SEED_TU = 0.10
-    seeded = False
-    if a.transition != "none":
-        if solve(pivot, False, a.transition, "_seed", tu=SEED_TU):
-            seeded = True
-    record(pivot, solve(pivot, seeded, a.transition))
     pivot_sol = case / "solution_flow.pivot.dat"
-    if sol.exists():
-        shutil.copy(sol, pivot_sol)  # save the pivot field to reseed the down branch
+    pivot_state = case / "pivot.json"
+    try:
+        saved_pivot = tuple(json.loads(pivot_state.read_text()))
+    except (OSError, json.JSONDecodeError):
+        saved_pivot = None
+    if pivot_sol.exists() and saved_pivot:
+        rows[pivot] = saved_pivot
+        print(f"--- M {mach:g} AoA {pivot:g} reusing completed pivot")
+    else:
+        SEED_TU = 0.10
+        seeded = False
+        if a.transition != "none":
+            if solve(pivot, False, a.transition, "_seed", tu=SEED_TU):
+                seeded = True
+        record(pivot, solve(pivot, seeded, a.transition))
+        if pivot in rows and sol.exists():
+            shutil.copy(sol, pivot_sol)  # save the pivot field to reseed both branches
+            save_checkpoint(pivot_state, rows[pivot])
 
-    peak_cl = rows[pivot][0] if pivot in rows else -float("inf")
-    post_stall = False
-    for aoa in up[1:]:               # ascending above the pivot, warm-started
-        r = solve(aoa, True, a.transition, unsteady=post_stall)
-        record(aoa, r)
-        if r:
-            if not post_stall and past_stall(peak_cl, r[0], 1, a.stall_drop):
-                post_stall = True
-                print(f"  stall detected at {aoa:g} deg (CL {r[0]:.4f}, peak {peak_cl:.4f}); "
-                      "switching the remaining up branch to URANS")
-            peak_cl = max(peak_cl, r[0])
-    if down and pivot_sol.exists():
-        shutil.copy(pivot_sol, sol)  # rewind to the pivot field before fanning down
-    trough_cl = rows[pivot][0] if pivot in rows else float("inf")
-    post_stall = False
-    for aoa in down:                 # descending below the pivot, warm-started
-        r = solve(aoa, True, a.transition, unsteady=post_stall)
-        record(aoa, r)
-        if r:
-            if not post_stall and past_stall(trough_cl, r[0], -1, a.stall_drop):
-                post_stall = True
-                print(f"  stall detected at {aoa:g} deg (CL {r[0]:.4f}, trough {trough_cl:.4f}); "
-                      "switching the remaining down branch to URANS")
-            trough_cl = min(trough_cl, r[0])
+    def march(branch, direction, checkpoint_path=None):
+        """Warm-start one monotonic branch from the pivot solution."""
+        peak = rows[pivot][0] if pivot in rows else (-float("inf") if direction > 0 else float("inf"))
+        post_stall = False
+        for aoa in branch:
+            r = solve(aoa, True, a.transition, unsteady=post_stall)
+            record(aoa, r)
+            if checkpoint_path and r and r[3]:
+                save_checkpoint(checkpoint_path, rows)
+            if r:
+                if not post_stall and past_stall(peak, r[0], direction, a.stall_drop):
+                    post_stall = True
+                    extremum = "peak" if direction > 0 else "trough"
+                    print(f"  stall detected at {aoa:g} deg (CL {r[0]:.4f}, {extremum} {peak:.4f}); "
+                          "switching the remaining branch to URANS")
+                peak = max(peak, r[0]) if direction > 0 else min(peak, r[0])
+
+    # The positive and negative marches no longer depend on one another once
+    # the pivot restart exists.  Fork them into isolated case directories so
+    # their history/restart files cannot collide, then merge their coefficients.
+    branches = [("up", up[1:], 1), ("down", down, -1)]
+    branches = [(name, values, direction) for name, values, direction in branches if values]
+    base_case = case
+    pivot_row = rows.get(pivot)
+    children = {}
+    if pivot_sol.exists() and len(branches) == 2:
+        for name, values, direction in branches:
+            pid = os.fork()
+            if pid == 0:
+                branch_case = base_case / name
+                branch_case.mkdir(exist_ok=True)
+                branch_mesh = branch_case / "airfoil.su2"
+                if not branch_mesh.exists():
+                    try:
+                        os.link(mesh, branch_mesh)
+                    except OSError:
+                        shutil.copy2(mesh, branch_mesh)
+                branch_rows = branch_case / "rows.json"
+                try:
+                    rows = {float(aoa): tuple(result) for aoa, result in json.loads(branch_rows.read_text()).items()}
+                except (OSError, json.JSONDecodeError):
+                    rows = {}
+                rows.setdefault(pivot, pivot_row)
+                if not (branch_case / "solution_flow.dat").exists():
+                    shutil.copy2(pivot_sol, branch_case / "solution_flow.dat")
+                case, sol, restart_dat = branch_case, branch_case / "solution_flow.dat", branch_case / "restart_flow.dat"
+                remaining = values[next((i for i, aoa in enumerate(values)
+                                         if aoa not in rows or not rows[aoa][3]), len(values)):]
+                march(remaining, direction, branch_rows)
+                save_checkpoint(branch_rows, rows)
+                sys.stdout.flush()
+                os._exit(0)
+            children[name] = pid
+        for name, pid in children.items():
+            _, status = os.waitpid(pid, 0)
+            branch_rows = base_case / name / "rows.json"
+            if status == 0 and branch_rows.exists():
+                rows.update({float(aoa): tuple(result) for aoa, result in json.loads(branch_rows.read_text()).items()})
+            else:
+                print(f"{name} branch failed before producing results")
+    else:
+        for name, values, direction in branches:
+            if name == "down" and pivot_sol.exists():
+                shutil.copy(pivot_sol, sol)
+            march(values, direction)
 
     rows = [(aoa, *rows[aoa]) for aoa in sorted(rows)]
     if not rows:

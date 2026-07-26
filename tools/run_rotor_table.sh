@@ -90,9 +90,10 @@ fmt_time() {
 
 AOA_POINTS=$(python -c "from polar import parse_aoa; print(len(parse_aoa('$AOA')))")
 TOTAL_COLUMNS=$(wc -w <<<"$MACH" | tr -d ' ')
+BRANCH_FACTOR=2
 ACTIVE_SLOTS=$(( SLOTS < TOTAL_COLUMNS ? SLOTS : TOTAL_COLUMNS ))
-if (( NP * ACTIVE_SLOTS > cores )); then
-  ACTIVE_SLOTS=$(( cores / NP ))
+if (( NP * BRANCH_FACTOR * ACTIVE_SLOTS > cores )); then
+  ACTIVE_SLOTS=$(( cores / (NP * BRANCH_FACTOR) ))
 fi
 if (( ACTIVE_SLOTS < 1 )); then
   echo "NP=$NP exceeds available logical cores ($cores)" >&2
@@ -142,25 +143,29 @@ trap 'interrupted HUP' HUP
 trap 'cleanup_jobs "script exit"' EXIT
 
 print_status() {
-  local now elapsed i done eta current last solver
+  local now elapsed i done eta current solver iteration residual cl cd cm
+  # Keep interactive table monitoring readable; never emit terminal controls into
+  # redirected logs or CI output.
+  if [ -t 1 ]; then printf '\033[H\033[2J'; fi
   now=$(date +%s)
   elapsed=$((now - table_started))
   echo "[$(date '+%H:%M:%S')] table: ${#pids[@]} running, $finished/$TOTAL_COLUMNS complete, elapsed $(fmt_time "$elapsed")"
+  printf '%-7s %-20s %-8s %-7s %-9s %-9s %-9s %-9s %s\n' \
+    'Mach' 'current solve' 'points' 'iter' 'RMS' 'CL' 'CD' 'CMz' 'ETA'
   for i in "${!pids[@]}"; do
     done=$(awk '/CL=/{count++} END{print count+0}' "${job_logs[$i]}" 2>/dev/null || true)
-    current=$(awk '/--- M/{line=$0} END{if (line) {sub(/^.*--- M /, "", line); sub(/ \([0-9]+ ranks\).*/, "", line); print line}}' "${job_logs[$i]}" 2>/dev/null || true)
-    last=$(awk '/mesh calibration|CL=|stall detected|FAILED|URANS average/{line=$0} END{print line}' "${job_logs[$i]}" 2>/dev/null || true)
+    current=$(awk '/--- M/{line=$0} END{if (line) {sub(/^.* AoA /, "", line); sub(/ \([0-9]+ ranks\).*/, "", line); print line}}' "${job_logs[$i]}" 2>/dev/null || true)
     if (( done > 0 )); then
       eta=$(fmt_time "$(( (now - ${job_starts[$i]}) * (AOA_POINTS - done) / done ))")
     else
       eta="estimating"
     fi
-    printf '  M=%s  AoA %s  %s/%s complete  elapsed %s  ETA %s\n' \
-      "${job_machs[$i]}" "${current:-starting}" "$done" "$AOA_POINTS" \
-      "$(fmt_time "$((now - ${job_starts[$i]}))")" "$eta"
-    if [ -n "$last" ]; then echo "    $last"; fi
     solver=$(latest_solver_status "${job_outs[$i]}" || true)
-    if [ -n "$solver" ]; then echo "    $solver"; fi
+    iteration='-' residual='-' cl='-' cd='-' cm='-'
+    if [ -n "$solver" ]; then IFS=$'\t' read -r iteration residual cl cd cm <<< "$solver" || true; fi
+    printf '%-7s %-20s %2s/%-5s %-7s %-9s %-9s %-9s %-9s %s\n' \
+      "${job_machs[$i]}" "${current:-starting}" "$done" "$AOA_POINTS" \
+      "$iteration" "$residual" "$cl" "$cd" "$cm" "$eta"
   done
 }
 
@@ -169,7 +174,7 @@ latest_solver_status() {
 from pathlib import Path
 import csv, sys
 
-files = sorted(Path(sys.argv[1]).glob("history_*.csv"), key=lambda p: p.stat().st_mtime)
+files = sorted(Path(sys.argv[1]).rglob("history_*.csv"), key=lambda p: p.stat().st_mtime)
 if not files:
     raise SystemExit
 try:
@@ -181,10 +186,14 @@ try:
     if not row:
         raise SystemExit
     row = {k.strip().strip('"'): v.strip() for k, v in row.items() if k}
-    iteration = row.get("Time_Iter") or row.get("Inner_Iter") or row.get("Outer_Iter") or "?"
-    residual = next((f"{k}={float(v):.2e}" for k, v in row.items() if k.startswith("rms[") and v), "RMS=?")
-    coeff = " ".join(f"{k}={float(row[k]):.5f}" for k in ("CL", "CD", "CMz") if row.get(k))
-    print(f"solver {files[-1].stem}: iter={iteration} {residual} {coeff}")
+    # Steady histories retain Time_Iter=0 while Inner_Iter advances.  A
+    # positive Time_Iter identifies URANS and is more useful there.
+    time_iter = row.get("Time_Iter", "")
+    iteration = (time_iter if time_iter and float(time_iter) > 0 else
+                 row.get("Inner_Iter") or row.get("Outer_Iter") or time_iter or "?")
+    residual = next((f"{k[4:-1]} {float(v):.2f}" for k, v in row.items() if k.startswith("rms[") and v), "-")
+    coeff = [f"{float(row.get(k, 'nan')):.5f}" if row.get(k) else "-" for k in ("CL", "CD", "CMz")]
+    print("\t".join([str(iteration), residual, *coeff]))
 except Exception:
     pass
 PY
@@ -226,9 +235,9 @@ wait_for_slot() {
 }
 
 echo "sweep: $AIRFOIL columns[$MACH] $(if [ -n "${RE:-}" ]; then echo "Re=$RE"; else echo "chord=$CHORD"; fi) regime=${REGIME:-auto@$INC_MAX_MACH} AoAs=$AOA_POINTS"
-echo "resources: $cores logical cores, NP=$NP, requested slots=$SLOTS, active columns=$ACTIVE_SLOTS, active ranks=$((NP * ACTIVE_SLOTS))"
-if (( NP * ACTIVE_SLOTS < cores )); then
-  echo "resources: $((cores - NP * ACTIVE_SLOTS)) cores idle; only $TOTAL_COLUMNS Mach columns can run concurrently. Raise NP only if tune_np.py proves it improves a single-column solve."
+echo "resources: $cores logical cores, NP=$NP, requested slots=$SLOTS, active columns=$ACTIVE_SLOTS, post-pivot branches=$((ACTIVE_SLOTS * BRANCH_FACTOR)), peak ranks=$((NP * ACTIVE_SLOTS * BRANCH_FACTOR))"
+if (( NP * ACTIVE_SLOTS * BRANCH_FACTOR < cores )); then
+  echo "resources: $((cores - NP * ACTIVE_SLOTS * BRANCH_FACTOR)) cores idle; only $TOTAL_COLUMNS Mach columns can run concurrently."
 fi
 for m in $MACH; do
   wait_for_slot
