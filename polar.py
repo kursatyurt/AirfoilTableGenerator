@@ -392,6 +392,12 @@ def run_sweep(a, dat, x, y, mach, case, regime):
             return subprocess.call(["mpirun", "-n", str(a.np), "SU2_CFD", cfg_name],
                                    cwd=case, stdout=log, stderr=subprocess.STDOUT)
 
+    def log_tail(path, lines=12):
+        try:
+            return "\n".join(path.read_text(errors="replace").splitlines()[-lines:])
+        except OSError:
+            return "(solver log unavailable)"
+
     def solve(aoa, restart, transition, suffix="", tu=None, unsteady=False):
         """Run one angle; return (CL, CD, CMz, converged) or None. Leaves the
         converged field in solution_flow.dat for the next (warm-started) angle."""
@@ -404,10 +410,11 @@ def run_sweep(a, dat, x, y, mach, case, regime):
             cfg.write_text(make_cfg(regime, aoa, a.re, mach, a.iters, restart, transition,
                                     a.tu if tu is None else tu, "_urans" if unsteady else "", unsteady,
                                     a.urans_steps_per_chord, duration, a.urans_inner_iters))
-            rc = su2(cfg.name, f"aoa_{tag}{suffix}{'_extend' + str(attempt) if attempt else ''}.log")
+            log_name = f"aoa_{tag}{suffix}{'_extend' + str(attempt) if attempt else ''}.log"
+            rc = su2(cfg.name, log_name)
             hist = case / f"history_{tag}.csv"
             if rc != 0 or not hist.exists():
-                print(f"FAILED (rc={rc}), see aoa_{tag}{suffix}.log")
+                print(f"FAILED (rc={rc}), see {log_name}\n{log_tail(case / log_name)}")
                 return None
             h = read_history(hist)
             n_iter = sum(1 for _ in open(hist)) - 1

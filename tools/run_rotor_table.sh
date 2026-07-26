@@ -107,6 +107,40 @@ job_starts=()
 failed=0
 finished=0
 
+terminate_tree() {
+  local pid=$1 child
+  # mpirun and its ranks are descendants of the tracked column wrapper.  Kill
+  # children first so an interrupted table never leaves orphaned solver ranks.
+  for child in $(pgrep -P "$pid" 2>/dev/null || true); do
+    terminate_tree "$child"
+  done
+  kill -TERM "$pid" 2>/dev/null || true
+}
+
+cleanup_jobs() {
+  local reason=$1 pid
+  trap - EXIT INT TERM HUP
+  (( ${#pids[@]} )) || return 0
+  echo "[$(date '+%H:%M:%S')] stopping ${#pids[@]} launched column job(s): $reason" >&2
+  for pid in "${pids[@]}"; do terminate_tree "$pid"; done
+  sleep 1
+  for pid in "${pids[@]}"; do
+    if kill -0 "$pid" 2>/dev/null; then kill -KILL "$pid" 2>/dev/null || true; fi
+    wait "$pid" 2>/dev/null || true
+  done
+}
+
+interrupted() {
+  local signal=$1
+  cleanup_jobs "received $signal"
+  exit 1
+}
+
+trap 'interrupted INT' INT
+trap 'interrupted TERM' TERM
+trap 'interrupted HUP' HUP
+trap 'cleanup_jobs "script exit"' EXIT
+
 print_status() {
   local now elapsed i done eta current last solver
   now=$(date +%s)
