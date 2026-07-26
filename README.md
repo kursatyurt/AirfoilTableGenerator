@@ -59,6 +59,11 @@ by a couple of degrees, so this cuts most of the sweep's cost. Mesh metadata
 records its airfoil hash and operating conditions, so changing them regenerates
 the mesh rather than silently reusing a stale one.
 
+`tools/run_rotor_table.sh` prints a live table dashboard while columns run:
+per-Mach current AoA, completed/total angles, elapsed time, last solver event,
+and a rolling ETA once the first point completes. Set `STATUS_INTERVAL=5` to
+refresh every five seconds instead of the default 15.
+
 ## Options
 
 | flag | default | note |

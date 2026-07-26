@@ -18,7 +18,7 @@ polar.py calibrates and caches the farfield once per airfoil/Mach.
 
 Optional overrides: RE, SOUND, NU, INC_MAX_MACH, YPLUS, OUTROOT, ITERS, TU, NP, SLOTS,
 STALL_DROP, URANS_STEPS_PER_CHORD, URANS_CONVECTIVE_TIMES, URANS_INNER_ITERS,
-FARFIELD, REGIME. MACHS is accepted as a backwards-compatible alias for MACH.
+FARFIELD, REGIME, STATUS_INTERVAL. MACHS is accepted as a backwards-compatible alias for MACH.
 EOF
 }
 
@@ -39,18 +39,14 @@ if [ -z "${OUTROOT:-}" ]; then
   OUTROOT="runs/${AIRFOIL}_$(if [ -n "${RE:-}" ]; then echo "Re${RE}"; else echo "c${CHORD}"; fi)"
 fi
 SLOTS=${SLOTS:-1}
+STATUS_INTERVAL=${STATUS_INTERVAL:-15}
 if [ -n "${REGIME:-}" ]; then
   case "$REGIME" in inc|comp) ;; *) echo "REGIME must be inc or comp" >&2; exit 2;; esac
 fi
 
 source env.sh
-if [ -n "${NP:-}" ]; then
-  cores=$(python -c 'import os; print(os.cpu_count() or 1)')
-  if (( NP * SLOTS > cores )); then
-    echo "NP * SLOTS exceeds available logical cores ($NP * $SLOTS > $cores)" >&2
-    exit 2
-  fi
-fi
+cores=$(python -c 'import os; print(os.cpu_count() or 1)')
+NP=${NP:-$(python -c 'import os; from tune_np import stored_np; print(stored_np() or max(1, (os.cpu_count() or 1) // 2))')}
 mkdir -p "$OUTROOT"
 
 run_column() {  # $1 = Mach
@@ -80,22 +76,141 @@ run_column() {  # $1 = Mach
   log="$OUTROOT/${AIRFOIL}_m${nn}.log"
   {
     echo "=== $out M$m Re$re $regime $TRANSITION $(date) ==="
-    python polar.py --airfoil "$AIRFOIL" --mach "$m" --re "$re" --aoa "$AOA" \
+    python -u polar.py --airfoil "$AIRFOIL" --mach "$m" --re "$re" --aoa "$AOA" \
       --regime "$regime" --yplus "$YPLUS" "${farfield_arg[@]}" "${optional[@]}" \
       --transition "$TRANSITION" --outdir "$out"
     echo "=== $out DONE $(date) ==="
   } &>> "$log"
 }
 
-echo "sweep: $AIRFOIL columns[$MACH] $(if [ -n "${RE:-}" ]; then echo "Re=$RE"; else echo "chord=$CHORD"; fi) regime=${REGIME:-auto@$INC_MAX_MACH} slots=$SLOTS"
+fmt_time() {
+  local seconds=$1
+  printf '%02dh:%02dm:%02ds' "$((seconds / 3600))" "$(((seconds % 3600) / 60))" "$((seconds % 60))"
+}
+
+AOA_POINTS=$(python -c "from polar import parse_aoa; print(len(parse_aoa('$AOA')))")
+TOTAL_COLUMNS=$(wc -w <<<"$MACH" | tr -d ' ')
+ACTIVE_SLOTS=$(( SLOTS < TOTAL_COLUMNS ? SLOTS : TOTAL_COLUMNS ))
+if (( NP * ACTIVE_SLOTS > cores )); then
+  ACTIVE_SLOTS=$(( cores / NP ))
+fi
+if (( ACTIVE_SLOTS < 1 )); then
+  echo "NP=$NP exceeds available logical cores ($cores)" >&2
+  exit 2
+fi
+table_started=$(date +%s)
 pids=()
+job_machs=()
+job_logs=()
+job_outs=()
+job_starts=()
+failed=0
+finished=0
+
+print_status() {
+  local now elapsed i done eta current last solver
+  now=$(date +%s)
+  elapsed=$((now - table_started))
+  echo "[$(date '+%H:%M:%S')] table: ${#pids[@]} running, $finished/$TOTAL_COLUMNS complete, elapsed $(fmt_time "$elapsed")"
+  for i in "${!pids[@]}"; do
+    done=$(awk '/CL=/{count++} END{print count+0}' "${job_logs[$i]}" 2>/dev/null)
+    current=$(awk '/--- M/{line=$0} END{if (line) {sub(/^.*--- M /, "", line); sub(/ \([0-9]+ ranks\).*/, "", line); print line}}' "${job_logs[$i]}" 2>/dev/null)
+    last=$(awk '/mesh calibration|CL=|stall detected|FAILED|URANS average/{line=$0} END{print line}' "${job_logs[$i]}" 2>/dev/null)
+    if (( done > 0 )); then
+      eta=$(fmt_time "$(( (now - ${job_starts[$i]}) * (AOA_POINTS - done) / done ))")
+    else
+      eta="estimating"
+    fi
+    printf '  M=%s  AoA %s  %s/%s complete  elapsed %s  ETA %s\n' \
+      "${job_machs[$i]}" "${current:-calibrating mesh}" "$done" "$AOA_POINTS" \
+      "$(fmt_time "$((now - ${job_starts[$i]}))")" "$eta"
+    [ -n "$last" ] && echo "    $last"
+    solver=$(latest_solver_status "${job_outs[$i]}")
+    [ -n "$solver" ] && echo "    $solver"
+  done
+}
+
+latest_solver_status() {
+  python - "$1" <<'PY'
+from pathlib import Path
+import csv, sys
+
+files = sorted(Path(sys.argv[1]).glob("history_*.csv"), key=lambda p: p.stat().st_mtime)
+if not files:
+    raise SystemExit
+try:
+    with files[-1].open(newline="") as f:
+        reader = csv.DictReader(f)
+        row = None
+        for row in reader:
+            pass
+    if not row:
+        raise SystemExit
+    row = {k.strip().strip('"'): v.strip() for k, v in row.items() if k}
+    iteration = row.get("Time_Iter") or row.get("Inner_Iter") or row.get("Outer_Iter") or "?"
+    residual = next((f"{k}={float(v):.2e}" for k, v in row.items() if k.startswith("rms[") and v), "RMS=?")
+    coeff = " ".join(f"{k}={float(row[k]):.5f}" for k in ("CL", "CD", "CMz") if row.get(k))
+    print(f"solver {files[-1].stem}: iter={iteration} {residual} {coeff}")
+except (OSError, ValueError, csv.Error):
+    pass
+PY
+}
+
+reap_finished() {
+  local i rc
+  local -a next_pids=() next_machs=() next_logs=() next_outs=() next_starts=()
+  for i in "${!pids[@]}"; do
+    if kill -0 "${pids[$i]}" 2>/dev/null; then
+      next_pids+=("${pids[$i]}")
+      next_machs+=("${job_machs[$i]}")
+      next_logs+=("${job_logs[$i]}")
+      next_outs+=("${job_outs[$i]}")
+      next_starts+=("${job_starts[$i]}")
+    else
+      if wait "${pids[$i]}"; then
+        finished=$((finished + 1))
+        echo "[$(date '+%H:%M:%S')] M=${job_machs[$i]} completed in $(fmt_time "$(( $(date +%s) - ${job_starts[$i]} ))")"
+      else
+        echo "[$(date '+%H:%M:%S')] M=${job_machs[$i]} FAILED; see ${job_logs[$i]}" >&2
+        failed=1
+      fi
+    fi
+  done
+  pids=("${next_pids[@]}")
+  job_machs=("${next_machs[@]}")
+  job_logs=("${next_logs[@]}")
+  job_outs=("${next_outs[@]}")
+  job_starts=("${next_starts[@]}")
+}
+
+wait_for_slot() {
+  while (( ${#pids[@]} >= ACTIVE_SLOTS )); do
+    print_status
+    sleep "$STATUS_INTERVAL"
+    reap_finished
+  done
+}
+
+echo "sweep: $AIRFOIL columns[$MACH] $(if [ -n "${RE:-}" ]; then echo "Re=$RE"; else echo "chord=$CHORD"; fi) regime=${REGIME:-auto@$INC_MAX_MACH} AoAs=$AOA_POINTS"
+echo "resources: $cores logical cores, NP=$NP, requested slots=$SLOTS, active columns=$ACTIVE_SLOTS, active ranks=$((NP * ACTIVE_SLOTS))"
+if (( NP * ACTIVE_SLOTS < cores )); then
+  echo "resources: $((cores - NP * ACTIVE_SLOTS)) cores idle; only $TOTAL_COLUMNS Mach columns can run concurrently. Raise NP only if tune_np.py proves it improves a single-column solve."
+fi
 for m in $MACH; do
+  wait_for_slot
   run_column "$m" &
   pids+=("$!")
-  if [ "${#pids[@]}" -ge "$SLOTS" ]; then
-    wait "${pids[0]}"
-    pids=("${pids[@]:1}")
-  fi
+  nn=$(python -c "print(f'{int(round($m*100)):03d}')")
+  job_machs+=("$m")
+  job_logs+=("$OUTROOT/${AIRFOIL}_m${nn}.log")
+  job_outs+=("$OUTROOT/${AIRFOIL}_m${nn}")
+  job_starts+=("$(date +%s)")
+  echo "[$(date '+%H:%M:%S')] launched M=$m; log: $OUTROOT/${AIRFOIL}_m${nn}.log"
 done
-wait
-echo "all columns done: $AIRFOIL $MACH"
+while (( ${#pids[@]} )); do
+  print_status
+  sleep "$STATUS_INTERVAL"
+  reap_finished
+done
+(( failed == 0 )) || exit 1
+echo "all columns done: $AIRFOIL $MACH in $(fmt_time "$(( $(date +%s) - table_started ))")"

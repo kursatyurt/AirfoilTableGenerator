@@ -271,6 +271,7 @@ def calibrate_farfield(a, dat, x, y, mach, regime, case, reference_aoa):
     root = case / "mesh_calibration"
     radius = auto_farfield(mach)
     for _ in range(10):
+        print(f"mesh calibration: M={mach:g}, AoA={reference_aoa:g}, comparing {radius:g}c to {radius + 10:g}c", flush=True)
         results = []
         for candidate in (radius, radius + 10.0):
             probe = root / f"r{candidate:g}"
