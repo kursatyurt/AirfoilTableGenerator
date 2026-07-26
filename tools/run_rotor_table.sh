@@ -14,7 +14,7 @@ INC_MAX_MACH (default 0.25) use INC_RANS; higher columns use compressible RANS.
 With CHORD, Re(M) is derived using standard sea-level SOUND=341.348 m/s and
 NU=1.4607e-5 m²/s. Set RE=... instead to use one explicit Reynolds number.
 YPLUS defaults to 1 and OUTROOT is derived from the supplied airfoil/chord or Re.
-polar.py calibrates and caches the farfield once per airfoil/Mach.
+polar.py uses the validated Mach-based farfield formula (25c minimum; 35c at M=0.5).
 
 Optional overrides: RE, SOUND, NU, INC_MAX_MACH, YPLUS, OUTROOT, ITERS, TU, NP, SLOTS,
 STALL_DROP, URANS_STEPS_PER_CHORD, URANS_CONVECTIVE_TIMES, URANS_INNER_ITERS,

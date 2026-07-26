@@ -258,8 +258,8 @@ def find_dat(name):
 def calibrate_farfield(a, dat, x, y, mach, regime, case, reference_aoa):
     """Find and cache the smallest domain stable to the next 10c radius."""
     identity = {"version": MESH_CACHE_VERSION, "airfoil_sha256": file_hash(dat), "re": a.re,
-                "mach": mach, "regime": regime, "yplus": a.yplus, "transition": a.transition,
-                "tu": a.tu, "reference_aoa": reference_aoa}
+                "mach": mach, "regime": regime, "yplus": a.yplus,
+                "model": "fully_turbulent_sa", "reference_aoa": reference_aoa}
     cache = case / "mesh_calibration.json"
     try:
         saved = json.loads(cache.read_text())
@@ -277,7 +277,9 @@ def calibrate_farfield(a, dat, x, y, mach, regime, case, reference_aoa):
             probe = root / f"r{candidate:g}"
             probe.mkdir(parents=True, exist_ok=True)
             ensure_mesh(probe / "airfoil.su2", mesh_spec(dat, a.re, mach, a.yplus, candidate), x, y)
-            cfg = make_cfg(regime, reference_aoa, a.re, mach, a.iters, False, a.transition, a.tu)
+            # Domain sensitivity belongs to the mesh, not the transition front.  SA is
+            # faster and robust here; the actual table still uses the requested model.
+            cfg = make_cfg(regime, reference_aoa, a.re, mach, a.iters, False, "none", a.tu)
             (probe / "probe.cfg").write_text(cfg.replace("OUTPUT_FILES= ( RESTART, PARAVIEW, SURFACE_CSV )",
                                                            "OUTPUT_FILES= ( RESTART )"))
             with open(probe / "probe.log", "w") as log:
@@ -285,7 +287,8 @@ def calibrate_farfield(a, dat, x, y, mach, regime, case, reference_aoa):
                                      stdout=log, stderr=subprocess.STDOUT)
             hist = probe / f"history_{reference_aoa:+.2f}.csv"
             if rc != 0 or not hist.exists():
-                raise RuntimeError(f"mesh calibration failed at M={mach:g}, radius={candidate:g}c")
+                tail = "\n".join((probe / "probe.log").read_text(errors="replace").splitlines()[-12:])
+                raise RuntimeError(f"mesh calibration failed at M={mach:g}, radius={candidate:g}c:\n{tail}")
             h = read_history(hist)
             n_iter = sum(1 for _ in open(hist)) - 1
             if n_iter >= a.iters:
@@ -317,7 +320,9 @@ def main():
     ap.add_argument("--yplus", type=float, default=1.0)
     ap.add_argument("--farfield", type=float,
                     help="optional farfield radius in chords; by default it is sized from Mach "
-                         "(25c minimum, 35c at M=0.5)")
+                    "(25c minimum, 35c at M=0.5)")
+    ap.add_argument("--calibrate-farfield", action="store_true",
+                    help="diagnostic only: verify the Mach-based farfield with two extra reference-AoA solves")
     ap.add_argument("--transition", choices=list(TRANSITION), default="none",
                     help="laminar-turbulent transition on top of SA: 'lm' = Langtry-Menter "
                          "gamma-Re_theta (two extra transport equations)")
@@ -371,9 +376,10 @@ def main():
 
 def run_sweep(a, dat, x, y, mach, case, regime):
     case.mkdir(parents=True, exist_ok=True)
-    reference_aoa = min(parse_aoa(a.aoa), key=lambda aoa: abs(aoa - 4.0))
-    farfield = (a.farfield if a.farfield is not None else
-                calibrate_farfield(a, dat, x, y, mach, regime, case, reference_aoa))
+    farfield = a.farfield if a.farfield is not None else auto_farfield(mach)
+    if a.calibrate_farfield:
+        reference_aoa = min(parse_aoa(a.aoa), key=lambda aoa: abs(aoa - 4.0))
+        farfield = calibrate_farfield(a, dat, x, y, mach, regime, case, reference_aoa)
 
     mesh = case / "airfoil.su2"
     ensure_mesh(mesh, mesh_spec(dat, a.re, mach, a.yplus, farfield), x, y)

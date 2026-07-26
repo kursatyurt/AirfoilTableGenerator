@@ -75,7 +75,8 @@ refresh every five seconds instead of the default 15.
 | `--np` | from `machine.conf` | MPI ranks. |
 | `--iters` | `10000` | max iterations per angle; the run stops earlier when the coefficient Cauchy criterion is met. |
 | `--yplus` | `1.0` | maximum target y+; wall spacing is derived from the requested Reynolds number and normal layers are added until it is met. |
-| `--farfield` | automatic | optional fixed radius in chords. Otherwise one reference-AoA radius check is cached per airfoil/Mach and the selected mesh is reused for every table angle. |
+| `--farfield` | automatic | optional fixed radius in chords. Otherwise the validated Mach-based formula is used (25c minimum; 35c at M=0.5). |
+| `--calibrate-farfield` | off | diagnostic only: check the formula with two extra reference-AoA solves. Never needed for normal table generation. |
 | `--transition` | `none` | `lm` adds Langtry-Menter laminar-turbulent transition on top of SA. |
 | `--tu` | `0.001` | freestream turbulence intensity the transition model keys off. |
 
