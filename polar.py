@@ -246,6 +246,9 @@ def find_dat(name):
     if p.is_file():
         return p
     db = FALCON / "Airfoil_DAT_Selig"
+    match = next((f for f in db.glob("*.dat") if f.stem.casefold() == Path(name).stem.casefold()), None)
+    if match:
+        return match
     import difflib
     near = difflib.get_close_matches(Path(name).stem, [f.stem for f in db.glob("*.dat")], n=8, cutoff=0.5)
     sys.exit(f"airfoil not found: {name} (not a file, not in {db})"

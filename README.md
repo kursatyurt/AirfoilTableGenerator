@@ -11,6 +11,11 @@ python tune_np.py        # once per machine: measures the right MPI rank count
 python polar.py --airfoil n0012 --re 1e6 --mach 0.15 --aoa -4:16:2
 ```
 
+`INSTALL.sh` builds SU2 in native release mode (`-Dcpu-arch=native`) with MPI.
+It records the CPU/compiler fingerprint and rebuilds automatically if the
+installation is moved to a different machine. Set `SU2_CPU_ARCH=generic` only
+when intentionally building a portable binary.
+
 Outputs land in `runs/<airfoil>/`: `airfoil.su2`, one `history_<aoa>.csv` +
 `aoa_<aoa>.log` per angle, and `polar.csv` / `polar.png`.
 

@@ -16,6 +16,9 @@ if [ ${#missing[@]} -ne 0 ]; then
   echo "Fedora/RHEL:   sudo dnf install -y git gcc-c++ openmpi-devel python3" >&2
   exit 1
 fi
+CPU_ARCH=${SU2_CPU_ARCH:-native}
+MACHINE_ID="$(uname -m)|$(sysctl -n hw.model 2>/dev/null || uname -n)|$(mpicxx --version | head -1)"
+BUILD_STAMP=$(printf 'arch=%s\nmachine=%s' "$CPU_ARCH" "$MACHINE_ID")
 python3 -c 'import sys; sys.exit(sys.version_info < (3, 8))' \
   || { echo "need python >= 3.8, got $(python3 -V)" >&2; exit 1; }
 free=$(df -Pk . | awk 'NR==2{print int($4/1048576)}')
@@ -43,19 +46,22 @@ echo "==> FALCON"
 # requirements.txt pulls the Tk GUI stack, so it is deliberately not installed.
 
 # ---- SU2 ------------------------------------------------------------------
-if [ -x opt/su2/bin/SU2_CFD ]; then
-  echo "==> SU2 already built"
+if [ -x opt/su2/bin/SU2_CFD ] && [ -f opt/su2/.build-machine ] && \
+   [ "$(cat opt/su2/.build-machine)" = "$BUILD_STAMP" ]; then
+  echo "==> SU2 release build matches this machine ($CPU_ARCH)"
 else
-  echo "==> SU2 source build with MPI (~20-40 min on $NP cores)"
+  echo "==> SU2 native release build with MPI (~20-40 min on $NP cores)"
   [ -d opt/SU2-src/.git ] || git clone --depth 1 https://github.com/su2code/SU2 opt/SU2-src
   cd opt/SU2-src
   # SU2 bundles meson and ninja as submodules; meson.py initialises them.
   ./meson.py build -Dwith-mpi=enabled -Denable-autodiff=false \
-                   -Denable-pywrapper=false --prefix="$ROOT/opt/su2"
+                   -Denable-pywrapper=false -Dcpu-arch="$CPU_ARCH" \
+                   --buildtype=release --prefix="$ROOT/opt/su2"
   NINJA=./ninja; [ -x "$NINJA" ] || NINJA="$ROOT/.venv/bin/ninja"
   [ -x "$NINJA" ] || { "$ROOT/.venv/bin/python" -m pip install -q ninja; NINJA="$ROOT/.venv/bin/ninja"; }
   "$NINJA" -C build install -j "$NP"
   cd "$ROOT"
+  printf '%s\n' "$BUILD_STAMP" > opt/su2/.build-machine
 fi
 
 cat > env.sh <<EOF
@@ -78,4 +84,4 @@ python "$ROOT/polar.py" --selftest
 echo
 echo "OK. Next:"
 echo "  source env.sh"
-echo "  python polar.py --airfoil naca0012 --re 1e6 --mach 0.15 --aoa -4:16:2 --np $((NP / 2))"
+echo "  AIRFOIL=naca0012 MACH=\"0.15\" RE=1e6 AOA=-4:16:2 TRANSITION=none bash tools/run_rotor_table.sh"
