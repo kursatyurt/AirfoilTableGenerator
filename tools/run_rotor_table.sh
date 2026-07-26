@@ -113,9 +113,9 @@ print_status() {
   elapsed=$((now - table_started))
   echo "[$(date '+%H:%M:%S')] table: ${#pids[@]} running, $finished/$TOTAL_COLUMNS complete, elapsed $(fmt_time "$elapsed")"
   for i in "${!pids[@]}"; do
-    done=$(awk '/CL=/{count++} END{print count+0}' "${job_logs[$i]}" 2>/dev/null)
-    current=$(awk '/--- M/{line=$0} END{if (line) {sub(/^.*--- M /, "", line); sub(/ \([0-9]+ ranks\).*/, "", line); print line}}' "${job_logs[$i]}" 2>/dev/null)
-    last=$(awk '/mesh calibration|CL=|stall detected|FAILED|URANS average/{line=$0} END{print line}' "${job_logs[$i]}" 2>/dev/null)
+    done=$(awk '/CL=/{count++} END{print count+0}' "${job_logs[$i]}" 2>/dev/null || true)
+    current=$(awk '/--- M/{line=$0} END{if (line) {sub(/^.*--- M /, "", line); sub(/ \([0-9]+ ranks\).*/, "", line); print line}}' "${job_logs[$i]}" 2>/dev/null || true)
+    last=$(awk '/mesh calibration|CL=|stall detected|FAILED|URANS average/{line=$0} END{print line}' "${job_logs[$i]}" 2>/dev/null || true)
     if (( done > 0 )); then
       eta=$(fmt_time "$(( (now - ${job_starts[$i]}) * (AOA_POINTS - done) / done ))")
     else
@@ -125,7 +125,7 @@ print_status() {
       "${job_machs[$i]}" "${current:-calibrating mesh}" "$done" "$AOA_POINTS" \
       "$(fmt_time "$((now - ${job_starts[$i]}))")" "$eta"
     [ -n "$last" ] && echo "    $last"
-    solver=$(latest_solver_status "${job_outs[$i]}")
+    solver=$(latest_solver_status "${job_outs[$i]}" || true)
     [ -n "$solver" ] && echo "    $solver"
   done
 }
@@ -151,7 +151,7 @@ try:
     residual = next((f"{k}={float(v):.2e}" for k, v in row.items() if k.startswith("rms[") and v), "RMS=?")
     coeff = " ".join(f"{k}={float(row[k]):.5f}" for k in ("CL", "CD", "CMz") if row.get(k))
     print(f"solver {files[-1].stem}: iter={iteration} {residual} {coeff}")
-except (OSError, ValueError, csv.Error):
+except Exception:
     pass
 PY
 }
