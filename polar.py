@@ -14,7 +14,7 @@ FALCON = ROOT / "opt" / "FALCON"
 sys.path.insert(0, str(FALCON))
 
 RHO, A_SOUND = 1.225, 341.348  # sea level, matches FALCON's meshing.py
-INC_MAX_MACH = 0.25
+INC_MAX_MACH = 0.325
 LIFT_COUNT = 0.002
 DRAG_COUNT = 0.0001
 MESH_CACHE_VERSION = 1
@@ -310,7 +310,7 @@ def main():
                     "to sweep Mach; each Mach gets its own mesh and subdir")
     ap.add_argument("--aoa", default="-4:16:2", help="lo:hi:step or comma list")
     ap.add_argument("--regime", choices=["auto", "inc", "comp"], default="auto",
-                    help="auto (default) uses INC_RANS below M=0.25 and compressible RANS above; "
+                    help="auto (default) uses INC_RANS below M=0.325 and compressible RANS above; "
                          "inc or comp forces one regime")
     ap.add_argument("--np", type=int, default=None,
                     help="MPI ranks; defaults to machine.conf from tune_np.py, else half the cores")
@@ -594,7 +594,7 @@ def selftest():
     assert abs(h["CL"] - 0.4412) < 1e-9 and abs(h["CD"] - 0.00931) < 1e-9, h
     p.write_text('"CL","CD"\n' + '0.400,0.01000\n0.401,0.01001\n' * 10)
     assert urans_stationary(p)
-    assert regime_for(0.1, "auto") == "inc" and regime_for(0.3, "auto") == "comp"
+    assert regime_for(0.3, "auto") == "inc" and regime_for(0.325, "auto") == "comp"
     foil = p.with_name("foil.dat")
     foil.write_text("foil\n0 0\n1 0\n")
     assert mesh_spec(foil, 1e6, 0.3, 1.0, 25.0) != mesh_spec(foil, 1e6, 0.3, 1.0, 35.0)

@@ -10,7 +10,7 @@ Usage:
   bash tools/run_rotor_table.sh
 
 MACH accepts a space-separated sweep, e.g. MACH="0.1 0.3 0.5". Columns below
-INC_MAX_MACH (default 0.25) use INC_RANS; higher columns use compressible RANS.
+INC_MAX_MACH (default 0.325) use INC_RANS; higher columns use compressible RANS.
 With CHORD, Re(M) is derived using standard sea-level SOUND=341.348 m/s and
 NU=1.4607e-5 m²/s. Set RE=... instead to use one explicit Reynolds number.
 YPLUS defaults to 1 and OUTROOT is derived from the supplied airfoil/chord or Re.
@@ -31,7 +31,7 @@ if [ -z "${RE:-}" ] && [ -z "${CHORD:-}" ]; then
   usage >&2
   exit 2
 fi
-INC_MAX_MACH=${INC_MAX_MACH:-0.25}
+INC_MAX_MACH=${INC_MAX_MACH:-0.325}
 YPLUS=${YPLUS:-1}
 SOUND=${SOUND:-341.348}
 NU=${NU:-1.4607e-5}
