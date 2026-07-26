@@ -156,11 +156,11 @@ print_status() {
       eta="estimating"
     fi
     printf '  M=%s  AoA %s  %s/%s complete  elapsed %s  ETA %s\n' \
-      "${job_machs[$i]}" "${current:-calibrating mesh}" "$done" "$AOA_POINTS" \
+      "${job_machs[$i]}" "${current:-starting}" "$done" "$AOA_POINTS" \
       "$(fmt_time "$((now - ${job_starts[$i]}))")" "$eta"
-    [ -n "$last" ] && echo "    $last"
+    if [ -n "$last" ]; then echo "    $last"; fi
     solver=$(latest_solver_status "${job_outs[$i]}" || true)
-    [ -n "$solver" ] && echo "    $solver"
+    if [ -n "$solver" ]; then echo "    $solver"; fi
   done
 }
 
