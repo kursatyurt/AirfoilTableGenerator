@@ -143,29 +143,32 @@ trap 'interrupted HUP' HUP
 trap 'cleanup_jobs "script exit"' EXIT
 
 print_status() {
-  local now elapsed i done eta current solver iteration residual cl cd cm
+  local now elapsed i done eta solver branch aoa iteration residual cl cd cm first
   # Keep interactive table monitoring readable; never emit terminal controls into
   # redirected logs or CI output.
   if [ -t 1 ]; then printf '\033[H\033[2J'; fi
   now=$(date +%s)
   elapsed=$((now - table_started))
   echo "[$(date '+%H:%M:%S')] table: ${#pids[@]} running, $finished/$TOTAL_COLUMNS complete, elapsed $(fmt_time "$elapsed")"
-  printf '%-7s %-20s %-8s %-7s %-9s %-9s %-9s %-9s %s\n' \
-    'Mach' 'current solve' 'points' 'iter' 'RMS' 'CL' 'CD' 'CMz' 'ETA'
+  printf '%-7s %-7s %-7s %-8s %-7s %-9s %-9s %-9s %-9s %s\n' \
+    'Mach' 'branch' 'AoA' 'points' 'iter' 'RMS' 'CL' 'CD' 'CMz' 'ETA'
   for i in "${!pids[@]}"; do
     done=$(awk '/CL=/{count++} END{print count+0}' "${job_logs[$i]}" 2>/dev/null || true)
-    current=$(awk '/--- M/{line=$0} END{if (line) {sub(/^.* AoA /, "", line); sub(/ \([0-9]+ ranks\).*/, "", line); print line}}' "${job_logs[$i]}" 2>/dev/null || true)
     if (( done > 0 )); then
       eta=$(fmt_time "$(( (now - ${job_starts[$i]}) * (AOA_POINTS - done) / done ))")
     else
       eta="estimating"
     fi
     solver=$(latest_solver_status "${job_outs[$i]}" || true)
-    iteration='-' residual='-' cl='-' cd='-' cm='-'
-    if [ -n "$solver" ]; then IFS=$'\t' read -r iteration residual cl cd cm <<< "$solver" || true; fi
-    printf '%-7s %-20s %2s/%-5s %-7s %-9s %-9s %-9s %-9s %s\n' \
-      "${job_machs[$i]}" "${current:-starting}" "$done" "$AOA_POINTS" \
-      "$iteration" "$residual" "$cl" "$cd" "$cm" "$eta"
+    if [ -z "$solver" ]; then solver=$'pivot\tstarting\t-\t-\t-\t-\t-'; fi
+    first=1
+    while IFS=$'\t' read -r branch aoa iteration residual cl cd cm; do
+      [ -n "$branch" ] || continue
+      printf '%-7s %-7s %-7s %2s/%-5s %-7s %-9s %-9s %-9s %-9s %s\n' \
+        "$(if (( first )); then echo "${job_machs[$i]}"; fi)" "$branch" "$aoa" "$done" "$AOA_POINTS" \
+        "$iteration" "$residual" "$cl" "$cd" "$cm" "$eta"
+      first=0
+    done <<< "$solver"
   done
 }
 
@@ -174,26 +177,33 @@ latest_solver_status() {
 from pathlib import Path
 import csv, sys
 
-files = sorted(Path(sys.argv[1]).rglob("history_*.csv"), key=lambda p: p.stat().st_mtime)
-if not files:
-    raise SystemExit
+root = Path(sys.argv[1])
+branches = [("pivot", root)]
+if (root / "up").exists() or (root / "down").exists():
+    branches = [("+", root / "up"), ("-", root / "down")]
 try:
-    with files[-1].open(newline="") as f:
-        reader = csv.DictReader(f)
-        row = None
-        for row in reader:
-            pass
-    if not row:
-        raise SystemExit
-    row = {k.strip().strip('"'): v.strip() for k, v in row.items() if k}
-    # Steady histories retain Time_Iter=0 while Inner_Iter advances.  A
-    # positive Time_Iter identifies URANS and is more useful there.
-    time_iter = row.get("Time_Iter", "")
-    iteration = (time_iter if time_iter and float(time_iter) > 0 else
-                 row.get("Inner_Iter") or row.get("Outer_Iter") or time_iter or "?")
-    residual = next((f"{k[4:-1]} {float(v):.2f}" for k, v in row.items() if k.startswith("rms[") and v), "-")
-    coeff = [f"{float(row.get(k, 'nan')):.5f}" if row.get(k) else "-" for k in ("CL", "CD", "CMz")]
-    print("\t".join([str(iteration), residual, *coeff]))
+    for branch, directory in branches:
+        files = sorted(directory.glob("history_*.csv"), key=lambda p: p.stat().st_mtime)
+        if not files:
+            print("\t".join([branch, "starting", "-", "-", "-", "-", "-"]))
+            continue
+        with files[-1].open(newline="") as f:
+            reader = csv.DictReader(f)
+            row = None
+            for row in reader:
+                pass
+        if not row:
+            continue
+        row = {k.strip().strip('"'): v.strip() for k, v in row.items() if k}
+        # Steady histories retain Time_Iter=0 while Inner_Iter advances.  A
+        # positive Time_Iter identifies URANS and is more useful there.
+        time_iter = row.get("Time_Iter", "")
+        iteration = (time_iter if time_iter and float(time_iter) > 0 else
+                     row.get("Inner_Iter") or row.get("Outer_Iter") or time_iter or "?")
+        residual = next((f"{k[4:-1]} {float(v):.2f}" for k, v in row.items() if k.startswith("rms[") and v), "-")
+        coeff = [f"{float(row.get(k, 'nan')):.5f}" if row.get(k) else "-" for k in ("CL", "CD", "CMz")]
+        aoa = files[-1].stem.removeprefix("history_")
+        print("\t".join([branch, aoa, str(iteration), residual, *coeff]))
 except Exception:
     pass
 PY
