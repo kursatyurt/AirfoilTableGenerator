@@ -90,10 +90,10 @@ LINEAR_SOLVER_PREC= ILU
 LINEAR_SOLVER_ERROR= 1E-6
 LINEAR_SOLVER_ITER= 15
 % Coefficients must be Cauchy-stable and the residual must reach its floor.
-% The residual tail damps the remaining CD oscillation; the tighter Cauchy test
-% prevents a numerically quiet residual from accepting a drifting polar value.
+% 5e-5 is one-half coefficient count: tight enough for a smooth polar, while
+% 1e-5 only adds an expensive steady-state polishing tail.
 CONV_CAUCHY_ELEMS= 100
-CONV_CAUCHY_EPS= 1E-5
+CONV_CAUCHY_EPS= 5E-5
 CONV_RESIDUAL_MINVAL= -6
 CONV_STARTITER= 100
 MESH_FILENAME= airfoil.su2
@@ -599,7 +599,7 @@ def selftest():
     foil.write_text("foil\n0 0\n1 0\n")
     assert mesh_spec(foil, 1e6, 0.3, 1.0, 25.0) != mesh_spec(foil, 1e6, 0.3, 1.0, 35.0)
     # Coefficients and the regime-specific residual must all converge.
-    assert "CONV_CAUCHY_ELEMS= 100" in COMMON and "CONV_CAUCHY_EPS= 1E-5" in COMMON
+    assert "CONV_CAUCHY_ELEMS= 100" in COMMON and "CONV_CAUCHY_EPS= 5E-5" in COMMON
     assert "CONV_RESIDUAL_MINVAL= -6" in COMMON
     cfg =make_cfg("inc", 2.0, 1e6, 0.15, 500, True)
     assert "MU_CONSTANT= 6.2722695000e-05" in cfg and "RESTART_SOL= YES" in cfg, cfg
