@@ -16,7 +16,8 @@ NU=1.4607e-5 m²/s. Set RE=... instead to use one explicit Reynolds number.
 YPLUS defaults to 1 and OUTROOT is derived from the supplied airfoil/chord or Re.
 polar.py uses the validated Mach-based farfield formula (25c minimum; 35c at M=0.5).
 
-Optional overrides: RE, SOUND, NU, INC_MAX_MACH, YPLUS, OUTROOT, ITERS, TU, NP, SLOTS,
+Optional overrides: RE, SOUND, NU, INC_MAX_MACH, YPLUS, OUTROOT, ITERS, TU, TURBULENCE,
+NP, SLOTS,
 STALL_DROP, URANS_STEPS_PER_CHORD, URANS_CONVECTIVE_TIMES, URANS_INNER_ITERS,
 FARFIELD, REGIME, STATUS_INTERVAL. MACHS is accepted as a backwards-compatible alias for MACH.
 EOF
@@ -32,6 +33,7 @@ if [ -z "${RE:-}" ] && [ -z "${CHORD:-}" ]; then
   exit 2
 fi
 INC_MAX_MACH=${INC_MAX_MACH:-0.325}
+TURBULENCE=${TURBULENCE:-sa}
 YPLUS=${YPLUS:-1}
 SOUND=${SOUND:-341.348}
 NU=${NU:-1.4607e-5}
@@ -75,10 +77,10 @@ run_column() {  # $1 = Mach
   out="$OUTROOT/${AIRFOIL}_m${nn}"
   log="$OUTROOT/${AIRFOIL}_m${nn}.log"
   {
-    echo "=== $out M$m Re$re $regime $TRANSITION $(date) ==="
+    echo "=== $out M$m Re$re $regime $TURBULENCE+$TRANSITION $(date) ==="
     python -u polar.py --airfoil "$AIRFOIL" --mach "$m" --re "$re" --aoa "$AOA" \
       --regime "$regime" --yplus "$YPLUS" "${farfield_arg[@]}" "${optional[@]}" \
-      --transition "$TRANSITION" --outdir "$out"
+      --transition "$TRANSITION" --turbulence "$TURBULENCE" --outdir "$out"
     echo "=== $out DONE $(date) ==="
   } &>> "$log"
 }

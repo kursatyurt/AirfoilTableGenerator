@@ -17,8 +17,9 @@ if [ ${#missing[@]} -ne 0 ]; then
   exit 1
 fi
 CPU_ARCH=${SU2_CPU_ARCH:-native}
+SU2_VERSION=${SU2_VERSION:-v8.5.0}
 MACHINE_ID="$(uname -m)|$(sysctl -n hw.model 2>/dev/null || uname -n)|$(mpicxx --version | head -1)"
-BUILD_STAMP=$(printf 'arch=%s\nmachine=%s' "$CPU_ARCH" "$MACHINE_ID")
+BUILD_STAMP=$(printf 'su2=%s\narch=%s\nmachine=%s' "$SU2_VERSION" "$CPU_ARCH" "$MACHINE_ID")
 python3 -c 'import sys; sys.exit(sys.version_info < (3, 8))' \
   || { echo "need python >= 3.8, got $(python3 -V)" >&2; exit 1; }
 free=$(df -Pk . | awk 'NR==2{print int($4/1048576)}')
@@ -51,7 +52,12 @@ if [ -x opt/su2/bin/SU2_CFD ] && [ -f opt/su2/.build-machine ] && \
   echo "==> SU2 release build matches this machine ($CPU_ARCH)"
 else
   echo "==> SU2 native release build with MPI (~20-40 min on $NP cores)"
-  [ -d opt/SU2-src/.git ] || git clone --depth 1 https://github.com/su2code/SU2 opt/SU2-src
+  if [ -d opt/SU2-src/.git ]; then
+    git -C opt/SU2-src fetch --depth 1 origin "refs/tags/$SU2_VERSION:refs/tags/$SU2_VERSION"
+    git -C opt/SU2-src checkout --detach "$SU2_VERSION"
+  else
+    git clone --depth 1 --branch "$SU2_VERSION" https://github.com/su2code/SU2 opt/SU2-src
+  fi
   cd opt/SU2-src
   # SU2 bundles meson and ninja as submodules; meson.py initialises them.
   ./meson.py build -Dwith-mpi=enabled -Denable-autodiff=false \

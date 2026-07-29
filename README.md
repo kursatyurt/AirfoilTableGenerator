@@ -74,29 +74,33 @@ refresh every five seconds instead of the default 15.
 | `--regime` | `auto` | `auto` uses INC_RANS below M=0.325 and compressible RANS otherwise; `inc` or `comp` forces a regime. |
 | `--np` | from `machine.conf` | MPI ranks. |
 | `--iters` | `10000` | max iterations per angle; the run stops earlier when the coefficient Cauchy criterion is met. |
-| `--yplus` | `1.0` | maximum target y+; wall spacing is derived from the requested Reynolds number and normal layers are added until it is met. |
+| `--yplus` | `1.0` | maximum target y+; wall spacing is derived from Reynolds number, and the solved maximum `Y_PLUS` is written to screen/history output for verification. |
 | `--farfield` | automatic | optional fixed radius in chords. Otherwise the validated Mach-based formula is used (25c minimum; 35c at M=0.5). |
 | `--calibrate-farfield` | off | diagnostic only: check the formula with two extra reference-AoA solves. Never needed for normal table generation. |
-| `--transition` | `none` | `lm` adds Langtry-Menter laminar-turbulent transition on top of SA. |
+| `--transition` | `none` | `lm` adds Langtry-Menter laminar-turbulent transition. |
+| `--turbulence` | `sa` | RANS turbulence model; use `--turbulence sst --transition lm` for low-Re SST+LM. |
 | `--tu` | `0.001` | freestream turbulence intensity the transition model keys off. |
 
 ## Convergence
 
-Each angle converges on both the **force coefficients** and the residual floor:
-`CONV_FIELD= ( LIFT, DRAG, MOMENT_Z, RMS_... )`, with a `1E-5` Cauchy tolerance
+Each angle converges on the **force coefficients and every active model residual**:
+`CONV_FIELD` includes the flow, SA/SST, and LM residuals, with a `5E-5` Cauchy tolerance
 over the last `100` iterations and `rms < -6`. The residual tail is deliberate:
 it damps the remaining CD oscillation after the force coefficients look settled.
 If SU2 hits the `--iters` budget first, the angle is flagged `converged=0` in
 `polar.csv`.
 
-Pre-stall, incompressible RANS uses second-order FDS with an adaptive 10→100 CFL
-ramp; compressible RANS uses second-order Roe with low-Mach preconditioning and
-an adaptive ceiling of 75. Both use first-order SA transport and 15-iteration
-FGMRES/ILU linear solves at 1E-6 tolerance, while LM transition retains its
-conservative CFL limit.
+Pre-stall, incompressible RANS uses second-order FDS, bounded-scalar turbulence
+transport, an adaptive 10→100 CFL ramp, and BCGSTAB/ILU linear solves.
+Compressible RANS uses second-order Roe, an adaptive ceiling of 75, and
+FGMRES/ILU. SST+LM uses second-order turbulence transport; other models keep
+the robust first-order default. Both use 10-iteration linear solves
+at 1E-3 tolerance, while LM transition retains its conservative CFL limit.
+Production solves write only restart files; visualization and surface output
+are intentionally omitted from every-AoA sweeps.
 By default,
 an AoA branch detects stall when CL drops 0.02 below its branch peak, then
-switches every remaining requested AoA on that branch from steady RANS to
+reruns the triggering AoA and every remaining requested AoA using
 second-order dual-time URANS. Each value is accepted only after the means of
 the final two force windows agree within two lift counts and one drag count;
 otherwise the run extends its physical averaging window. The default resolves
@@ -104,19 +108,20 @@ otherwise the run extends its physical averaging window. The default resolves
 `--urans-steps-per-chord`, `--urans-convective-times`, and
 `--urans-inner-iters`. Use `--stall-drop 0` to keep the complete branch steady.
 URANS uses second-order dual time, centered JST (compressible) or LD2
-(incompressible) flow fluxes, and first-order upwind SA transport to limit
-artificial damping of the separated wake.
+(incompressible) flow fluxes, and first-order upwind turbulence transport for
+robustness.
 
 ## Transition
 
-Turbulence is always Spalart–Allmaras. `--transition lm` adds the Langtry-Menter
-γ-Reθ laminar-turbulent transition model on top of it (two extra transport
-equations) rather than replacing it:
+Turbulence defaults to Spalart–Allmaras. `--turbulence sst --transition lm`
+selects the low-Re SST+Langtry-Menter combination used by FALCON.
+`--transition lm` adds the γ-Reθ transition model (two extra transport
+equations) to the selected turbulence model:
 
 - `none` (default) — fully turbulent from the leading edge. Overpredicts drag at
   low Re and cannot produce a laminar drag bucket.
 - `lm` — Langtry-Menter γ-Reθ. Resolves natural transition and the drag bucket;
-  runs at a gentler CFL ceiling (15 vs 50) so it is slower per angle.
+  runs with a gentler CFL policy so it is slower per angle.
 
 `lm` reads `--tu`, the freestream turbulence intensity (`0.001` = 0.1%, a
 low-turbulence wind tunnel). Transition location is sensitive to it, so match it

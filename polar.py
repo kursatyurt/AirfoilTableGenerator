@@ -87,8 +87,9 @@ TIME_DISCRE_FLOW= EULER_IMPLICIT
 TIME_DISCRE_TURB= EULER_IMPLICIT
 LINEAR_SOLVER= FGMRES
 LINEAR_SOLVER_PREC= ILU
-LINEAR_SOLVER_ERROR= 1E-6
-LINEAR_SOLVER_ITER= 15
+LINEAR_SOLVER_ERROR= 1E-3
+LINEAR_SOLVER_ITER= 10
+SCREEN_WRT_FREQ_INNER= 20
 % Coefficients must be Cauchy-stable and the residual must reach its floor.
 % 5e-5 is one-half coefficient count: tight enough for a smooth polar, while
 % 1e-5 only adds an expensive steady-state polishing tail.
@@ -101,27 +102,34 @@ MESH_FORMAT= SU2
 SOLUTION_FILENAME= solution_flow.dat
 RESTART_FILENAME= restart_flow.dat
 TABULAR_FORMAT= CSV
-OUTPUT_FILES= ( RESTART, PARAVIEW, SURFACE_CSV )
+OUTPUT_FILES= ( RESTART )
 """
 
 
 TRANSITION = {
-    # LM rides on top of KIND_TURB_MODEL= SA; it does not replace it
-    "none": "",                      # fully turbulent from the leading edge
-    "lm": "KIND_TRANS_MODEL= LM\n",  # Langtry-Menter gamma-Re_theta, two extra equations
+    "none": "",  # fully turbulent from the leading edge
+    "lm": "KIND_TRANS_MODEL= LM\n",
 }
 
 
 def make_cfg(regime, aoa, re, mach, iters, restart, transition="none", tu=0.001,
-             output_suffix="", unsteady=False, urans_steps_per_chord=200,
+             turbulence="SA", output_suffix="", unsteady=False, urans_steps_per_chord=200,
              urans_convective_times=10, urans_inner=30):
+    turbulence = turbulence.upper()
     v = mach * A_SOUND
     output_suffix = output_suffix or ("_urans" if unsteady else "")
     tag = f"{aoa:+.2f}{output_suffix}"
     res = "RMS_PRESSURE" if regime == "inc" else "RMS_DENSITY"
+    residuals = [res, "RMS_NU_TILDE" if turbulence == "SA" else "RMS_TKE"]
+    if turbulence == "SST":
+        residuals.append("RMS_DISSIPATION")
+    if transition == "lm":
+        residuals.extend(["RMS_INTERMITTENCY", "RMS_RE_THETA_T"])
+    conv_fields = ", ".join(["LIFT", "DRAG", "MOMENT_Z", *residuals])
+    screen_residuals = ", ".join(residuals)
     # LM's two extra transport equations make the transition front hunt at high
     # CFL and stall convergence. Capping the adaptive CFL ceiling trades wall time
-    # for coefficients that actually settle. Fully-turbulent SA keeps the fast ceiling.
+    # for coefficients that actually settle. Fully turbulent runs keep the fast ceiling.
     cfl_max = 15.0 if transition != "none" else 75.0
     if unsteady:
         inc_cfl = "CFL_NUMBER= 2.0\nCFL_ADAPT= NO"
@@ -141,7 +149,6 @@ INC_NONDIM= INITIAL_VALUES
 INC_DENSITY_REF= {RHO}
 VISCOSITY_MODEL= CONSTANT_VISCOSITY
 MU_CONSTANT= {mu:.10e}
-FREESTREAM_NU_FACTOR= 4.0
 MARKER_HEATFLUX= ( Airfoil, 0.0 )
 AOA= {aoa}
 {inc_cfl}
@@ -162,9 +169,22 @@ CFL_ADAPT= {"NO" if unsteady else "YES"}
 CFL_ADAPT_PARAM= ( 0.1, 2.0, 5.0, {cfl_max} )
 CONV_NUM_METHOD_FLOW= {"JST" if unsteady else "ROE"}
 ENTROPY_FIX_COEFF= 0.05
-LOW_MACH_PREC= YES
 """
-    common = COMMON
+    common = COMMON.replace("KIND_TURB_MODEL= SA", f"KIND_TURB_MODEL= {turbulence}")
+    if regime == "inc":
+        common = common.replace("LINEAR_SOLVER= FGMRES", "LINEAR_SOLVER= BCGSTAB")
+        common = common.replace("CONV_NUM_METHOD_TURB= SCALAR_UPWIND",
+                                "CONV_NUM_METHOD_TURB= BOUNDED_SCALAR")
+    if turbulence == "SST" and transition == "lm":
+        common = common.replace("MUSCL_TURB= NO", "MUSCL_TURB= YES")
+    model_cfg = ("SA_OPTIONS= NONE\nFREESTREAM_NU_FACTOR= 4.0\n"
+                 if turbulence == "SA" else "SST_OPTIONS= V2003m\n")
+    if turbulence == "SST" or transition == "lm":
+        model_cfg += "FREESTREAM_TURB2LAMVISCRATIO= 4.0\n"
+    transition_cfg = TRANSITION[transition]
+    if transition == "lm":
+        correlation = "MENTER_LANGTRY" if turbulence == "SST" else "MALAN"
+        transition_cfg += f"LM_OPTIONS= {correlation}\nFREESTREAM_INTERMITTENCY= 1.0\n"
     if unsteady:
         # Match SU2's unsteady NACA RANS practice: centered low-dissipation
         # flow flux, no MUSCL reconstruction, and inexpensive implicit inner solves.
@@ -181,16 +201,16 @@ INNER_ITER= {urans_inner}
 MAX_TIME= {urans_convective_times / v * 1.01:.10e}
 WINDOW_START_ITER= {int(urans_steps * 0.4)}
 """
-        history = "HISTORY_OUTPUT= ( ITER, RMS_RES, AERO_COEFF, TAVG_AERO_COEFF, AOA )"
-        screen = f"SCREEN_OUTPUT= ( TIME_ITER, INNER_ITER, {res}, LIFT, DRAG, MOMENT_Z, TAVG_LIFT, TAVG_DRAG, TAVG_MOMENT_Z )"
+        history = "HISTORY_OUTPUT= ( ITER, RMS_RES, AERO_COEFF, TAVG_AERO_COEFF, Y_PLUS, AOA )"
+        screen = f"SCREEN_OUTPUT= ( TIME_ITER, INNER_ITER, {screen_residuals}, LIFT, DRAG, MOMENT_Z, Y_PLUS, TAVG_LIFT, TAVG_DRAG, TAVG_MOMENT_Z )"
         limit = ""
     else:
         unsteady_cfg = ""
-        history = "HISTORY_OUTPUT= ( ITER, RMS_RES, AERO_COEFF, AOA )"
-        screen = f"SCREEN_OUTPUT= ( INNER_ITER, {res}, RMS_MOMENTUM-X, LIFT, DRAG, MOMENT_Z )"
+        history = "HISTORY_OUTPUT= ( ITER, RMS_RES, AERO_COEFF, Y_PLUS, AOA )"
+        screen = f"SCREEN_OUTPUT= ( INNER_ITER, {screen_residuals}, RMS_MOMENTUM-X, LIFT, DRAG, MOMENT_Z, Y_PLUS )"
         limit = f"ITER= {iters}"
-    return head + common + TRANSITION[transition] + unsteady_cfg + f"""\
-CONV_FIELD= ( LIFT, DRAG, MOMENT_Z, {res} )
+    return head + common + model_cfg + transition_cfg + unsteady_cfg + f"""\
+CONV_FIELD= ( {conv_fields} )
 {screen}
 {history}
 FREESTREAM_TURBULENCEINTENSITY= {tu}
@@ -280,8 +300,7 @@ def calibrate_farfield(a, dat, x, y, mach, regime, case, reference_aoa):
             # Domain sensitivity belongs to the mesh, not the transition front.  SA is
             # faster and robust here; the actual table still uses the requested model.
             cfg = make_cfg(regime, reference_aoa, a.re, mach, a.iters, False, "none", a.tu)
-            (probe / "probe.cfg").write_text(cfg.replace("OUTPUT_FILES= ( RESTART, PARAVIEW, SURFACE_CSV )",
-                                                           "OUTPUT_FILES= ( RESTART )"))
+            (probe / "probe.cfg").write_text(cfg)
             with open(probe / "probe.log", "w") as log:
                 rc = subprocess.call(["mpirun", "-n", str(a.np), "SU2_CFD", "probe.cfg"], cwd=probe,
                                      stdout=log, stderr=subprocess.STDOUT)
@@ -324,8 +343,11 @@ def main():
     ap.add_argument("--calibrate-farfield", action="store_true",
                     help="diagnostic only: verify the Mach-based farfield with two extra reference-AoA solves")
     ap.add_argument("--transition", choices=list(TRANSITION), default="none",
-                    help="laminar-turbulent transition on top of SA: 'lm' = Langtry-Menter "
+                    help="laminar-turbulent transition: 'lm' = Langtry-Menter "
                          "gamma-Re_theta (two extra transport equations)")
+    ap.add_argument("--turbulence", choices=["sa", "sst"], default="sa",
+                    help="RANS turbulence model (default SA); use SST with --transition lm "
+                         "for the FALCON low-Re SST+LM setup")
     ap.add_argument("--tu", type=float, default=0.001,
                     help="freestream turbulence intensity for the transition models "
                          "(0.001 = 0.1%%, a low-turbulence wind tunnel)")
@@ -408,7 +430,8 @@ def run_sweep(a, dat, x, y, mach, case, regime):
         duration, h, n_iter, converged = a.urans_convective_times, None, 0, False
         for attempt in range(3 if unsteady else 1):
             cfg.write_text(make_cfg(regime, aoa, a.re, mach, a.iters, restart, transition,
-                                    a.tu if tu is None else tu, "_urans" if unsteady else "", unsteady,
+                                    a.tu if tu is None else tu, a.turbulence,
+                                    "_urans" if unsteady else "", unsteady,
                                     a.urans_steps_per_chord, duration, a.urans_inner_iters))
             log_name = f"aoa_{tag}{suffix}{'_extend' + str(attempt) if attempt else ''}.log"
             rc = su2(cfg.name, log_name)
@@ -485,16 +508,19 @@ def run_sweep(a, dat, x, y, mach, case, regime):
         post_stall = False
         for aoa in branch:
             r = solve(aoa, True, a.transition, unsteady=post_stall)
-            record(aoa, r)
-            if checkpoint_path and r and r[3]:
-                save_checkpoint(checkpoint_path, rows)
             if r:
                 if not post_stall and past_stall(peak, r[0], direction, a.stall_drop):
                     post_stall = True
                     extremum = "peak" if direction > 0 else "trough"
                     print(f"  stall detected at {aoa:g} deg (CL {r[0]:.4f}, {extremum} {peak:.4f}); "
-                          "switching the remaining branch to URANS")
+                          "rerunning this point and the remaining branch with URANS")
+                    r = solve(aoa, True, a.transition, unsteady=True)
+                    if not r:
+                        return
                 peak = max(peak, r[0]) if direction > 0 else min(peak, r[0])
+            record(aoa, r)
+            if checkpoint_path and r and r[3]:
+                save_checkpoint(checkpoint_path, rows)
 
     # The positive and negative marches no longer depend on one another once
     # the pivot restart exists.  Fork them into isolated case directories so
@@ -598,27 +624,40 @@ def selftest():
     foil = p.with_name("foil.dat")
     foil.write_text("foil\n0 0\n1 0\n")
     assert mesh_spec(foil, 1e6, 0.3, 1.0, 25.0) != mesh_spec(foil, 1e6, 0.3, 1.0, 35.0)
-    # Coefficients and the regime-specific residual must all converge.
+    # Coefficients and every active flow/model residual must all converge.
     assert "CONV_CAUCHY_ELEMS= 100" in COMMON and "CONV_CAUCHY_EPS= 5E-5" in COMMON
     assert "CONV_RESIDUAL_MINVAL= -6" in COMMON
     cfg =make_cfg("inc", 2.0, 1e6, 0.15, 500, True)
     assert "MU_CONSTANT= 6.2722695000e-05" in cfg and "RESTART_SOL= YES" in cfg, cfg
-    assert "CONV_FIELD= ( LIFT, DRAG, MOMENT_Z, RMS_PRESSURE )" in cfg
+    assert "CONV_FIELD= ( LIFT, DRAG, MOMENT_Z, RMS_PRESSURE, RMS_NU_TILDE )" in cfg
     comp0 = make_cfg("comp", 0.0, 1e6, 0.8, 500, False)
-    assert "CONV_FIELD= ( LIFT, DRAG, MOMENT_Z, RMS_DENSITY )" in comp0
+    assert "CONV_FIELD= ( LIFT, DRAG, MOMENT_Z, RMS_DENSITY, RMS_NU_TILDE )" in comp0
     assert "SOLVER= RANS" in comp0
     # the convective scheme is solver-specific: FDS is incompressible-only, ROE
     # compressible-only, and SU2 rejects the wrong one at startup
     assert "CONV_NUM_METHOD_FLOW= FDS" in cfg and "ROE" not in cfg
     comp = make_cfg("comp", 0.0, 1e6, 0.8, 500, False)
     assert "CONV_NUM_METHOD_FLOW= ROE" in comp and "FDS" not in comp
-    assert "LOW_MACH_PREC= YES" in comp  # comp is the default; must converge at low Mach too
-    # transition rides on top of SA, it never replaces the turbulence model
+    assert "LOW_MACH_PREC" not in comp
     assert list(TRANSITION) == ["none", "lm"]  # BCM removed; LM is the only transition model
     for t in TRANSITION:
         c = make_cfg("inc", 0.0, 1e6, 0.15, 500, False, transition=t, tu=0.002)
         assert "KIND_TURB_MODEL= SA" in c and "FREESTREAM_TURBULENCEINTENSITY= 0.002" in c
     assert "KIND_TRANS_MODEL= LM" in make_cfg("inc", 0.0, 1e6, 0.15, 500, False, "lm")
+    sst_lm = make_cfg("inc", 0.0, 1e6, 0.15, 500, False,
+                      transition="lm", turbulence="sst")
+    assert "KIND_TURB_MODEL= SST" in sst_lm and "KIND_TRANS_MODEL= LM" in sst_lm
+    assert "SST_OPTIONS= V2003m" in sst_lm
+    assert "LM_OPTIONS= MENTER_LANGTRY" in sst_lm
+    assert "FREESTREAM_TURB2LAMVISCRATIO= 4.0" in sst_lm
+    assert "FREESTREAM_INTERMITTENCY= 1.0" in sst_lm
+    assert "FREESTREAM_NU_FACTOR" not in sst_lm
+    assert "CONV_NUM_METHOD_TURB= BOUNDED_SCALAR" in sst_lm
+    assert "MUSCL_TURB= YES" in sst_lm
+    assert ("CONV_FIELD= ( LIFT, DRAG, MOMENT_Z, RMS_PRESSURE, RMS_TKE, "
+            "RMS_DISSIPATION, RMS_INTERMITTENCY, RMS_RE_THETA_T )") in sst_lm
+    assert "LM_OPTIONS= MALAN" in make_cfg(
+        "inc", 0.0, 1e6, 0.15, 500, False, transition="lm", turbulence="sa")
     # transition must run at a gentler CFL than fully-turbulent SA, or the front
     # hunts and the coefficients stall short of convergence (as on the first LM
     # 0015 sweep). Turbulent keeps the fast ceiling.
@@ -627,7 +666,11 @@ def selftest():
     inc_steady = make_cfg("inc", 0.0, 1e6, 0.15, 500, False, "none")
     assert "CFL_NUMBER= 10.0" in inc_steady and "CFL_ADAPT= YES" in inc_steady
     assert "CONV_NUM_METHOD_FLOW= FDS" in inc_steady and "MUSCL_FLOW= YES" in inc_steady
-    assert "MUSCL_TURB= NO" in inc_steady and "LINEAR_SOLVER_ITER= 15" in inc_steady
+    assert "MUSCL_TURB= NO" in inc_steady and "LINEAR_SOLVER= BCGSTAB" in inc_steady
+    assert "CONV_NUM_METHOD_TURB= BOUNDED_SCALAR" in inc_steady
+    assert "LINEAR_SOLVER_ITER= 10" in inc_steady and "LINEAR_SOLVER_ERROR= 1E-3" in inc_steady
+    assert "SCREEN_WRT_FREQ_INNER= 20" in inc_steady and "LINEAR_SOLVER= FGMRES" in comp
+    assert "OUTPUT_FILES= ( RESTART )" in inc_steady and "PARAVIEW" not in inc_steady
     assert "CFL_NUMBER= 10.0" in make_cfg("inc", 0.0, 1e6, 0.15, 500, False, "lm")
     urans = make_cfg("inc", 14.0, 1e6, 0.15, 500, True, unsteady=True)
     assert "TIME_DOMAIN= YES" in urans and "TIME_MARCHING= DUAL_TIME_STEPPING-2ND_ORDER" in urans
@@ -635,7 +678,7 @@ def selftest():
     assert "WINDOW_START_ITER= 800" in urans and "TAVG_AERO_COEFF" in urans
     assert "CONV_FILENAME= history_+14.00_urans" in urans and "ITER= 500" not in urans
     assert "CONV_NUM_METHOD_FLOW= LD2" in urans and "MUSCL_FLOW= NO" in urans
-    assert "MUSCL_TURB= NO" in urans and "LINEAR_SOLVER_ITER= 15" in urans
+    assert "MUSCL_TURB= NO" in urans and "LINEAR_SOLVER_ITER= 10" in urans
     comp_urans = make_cfg("comp", 14.0, 1e6, 0.15, 500, True, unsteady=True)
     assert "CONV_NUM_METHOD_FLOW= JST" in comp_urans and "CFL_NUMBER= 20.0" in comp_urans
     print("selftest ok")
