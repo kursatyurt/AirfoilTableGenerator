@@ -90,14 +90,47 @@ def format_c81_block(cols, machs, alphas):
 
 
 def main():
-    ap = argparse.ArgumentParser()
-    ap.add_argument("--airfoil", required=True,
-                    help="airfoil name as used by run_rotor_table.sh (case-insensitive)")
-    ap.add_argument("--case", required=True,
-                    help="run root written by run_rotor_table.sh, e.g. runs/VR12_c0.08")
-    ap.add_argument("--name", required=True, help="C81 table name")
-    ap.add_argument("--cdmax", type=float, required=True,
-                    help="flat-plate CD at 90 deg for Viterna (1.11+0.018*AR; ~2 for 2D)")
+    ap = argparse.ArgumentParser(
+        description="Assemble a C81 airfoil table from the polar.csv files of a "
+                    "finished run_rotor_table.sh sweep.",
+        epilog="""\
+expected input layout (what run_rotor_table.sh produces):
+
+  runs/VR12_c0.08/            <- pass this path as --case
+    VR12_m030/polar.csv       <- one directory per Mach, NNN = round(Mach*100)
+    VR12_m050/polar.csv          the "VR12" part is what you pass as --airfoil
+    VR12_m065/polar.csv
+
+output:
+
+  runs/VR12_c0.08/VR_12.c81   <- <case>/<name>.c81, i.e. written *into* --case
+
+example:
+
+  python tools/build_c81.py \\
+      --case    runs/VR12_c0.08 \\
+      --airfoil VR12 \\
+      --name    VR_12 \\
+      --cdmax   2.05
+
+Every option is required; nothing is guessed.""",
+        formatter_class=argparse.RawDescriptionHelpFormatter)
+    ap.add_argument("--case", required=True, metavar="DIR",
+                    help="INPUT DIRECTORY: the sweep root holding the "
+                         "<airfoil>_mNNN/polar.csv subdirectories "
+                         "(e.g. runs/VR12_c0.08). Relative paths are resolved "
+                         "against the repo root. The .c81 file is written here too.")
+    ap.add_argument("--airfoil", required=True, metavar="NAME",
+                    help="airfoil name as spelled in the <airfoil>_mNNN subdirectory "
+                         "names, e.g. VR12, n0012, NACA0015 (case-insensitive)")
+    ap.add_argument("--name", required=True, metavar="NAME",
+                    help="name of the table itself: goes in the C81 header and "
+                         "becomes the output filename <case>/<name>.c81 "
+                         "(max 30 chars, e.g. VR_12)")
+    ap.add_argument("--cdmax", type=float, required=True, metavar="CD",
+                    help="flat-plate CD at 90 deg used by the Viterna "
+                         "extrapolation to +-180 deg; 1.11+0.018*AR for a finite "
+                         "wing, ~2.0 for a 2D section (e.g. 2.05)")
     args = ap.parse_args()
     case_dir, airfoil = resolve_case(args.airfoil, args.case)
     table_name = args.name
