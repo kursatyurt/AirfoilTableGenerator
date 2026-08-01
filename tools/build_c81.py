@@ -16,10 +16,10 @@ Output format follows the C81 specification:
   Line 1: 30-char padded name, then six space-separated counts
   Lines 2+: CL block, CD block, CM block (each with Mach row + alpha rows)
 
-Usage: python tools/build_c81.py --airfoil VR12 --case runs/VR12_c0.08 \
-           --name VR_12 --cdmax 2.05
-       writes <case>/<name>.c81 and prints a summary.  Every option is required;
-       nothing is guessed.
+Usage: python tools/build_c81.py --case runs/VR12_c0.08 --name VR_12
+       writes <case>/<name>.c81 and prints a summary.  The airfoil is inferred
+       from the column directories and cdmax defaults to the 2D value; see
+       --help for when to override either.
 """
 import argparse
 import csv
@@ -41,6 +41,10 @@ WING = [22, 24, 27, 30, 35, 40, 45, 50, 60, 70, 80, 90, 100, 110, 120, 130, 140,
         150, 160, 170, 180]
 OUT_ALPHA = sorted(set([-a for a in WING] + CORE + WING))   # -180..180
 
+# Viterna flat-plate CD at 90 deg. The sweep produces 2D section polars, for
+# which the classical value is ~2; only a finite wing needs 1.11+0.018*AR.
+DEFAULT_CDMAX = 2.05
+
 
 def resolve_case(airfoil, case):
     """Return (case_dir, airfoil_as_spelled_on_disk).
@@ -53,11 +57,24 @@ def resolve_case(airfoil, case):
     case_dir = case if os.path.isabs(case) else os.path.join(HERE, case)
     if not os.path.isdir(case_dir):
         sys.exit(f"no such case directory: {case_dir}")
+    found = []
     for d in sorted(glob.glob(os.path.join(case_dir, "*_m*"))):
         stem = re.match(r"(.+)_m\d+$", os.path.basename(d))
-        if os.path.isdir(d) and stem and stem.group(1).lower() == airfoil.lower():
-            return case_dir, stem.group(1)
-    sys.exit(f"no {airfoil}_mNNN column directories under {case_dir}")
+        if os.path.isdir(d) and stem and stem.group(1) not in found:
+            found.append(stem.group(1))
+    if airfoil is None:
+        # A sweep writes one airfoil per OUTROOT, so the prefix is unambiguous.
+        if len(found) == 1:
+            return case_dir, found[0]
+        if not found:
+            sys.exit(f"no *_mNNN column directories under {case_dir}")
+        sys.exit(f"several airfoils under {case_dir} ({', '.join(found)}); "
+                 f"pick one with --airfoil")
+    for stem in found:
+        if stem.lower() == airfoil.lower():
+            return case_dir, stem
+    sys.exit(f"no {airfoil}_mNNN column directories under {case_dir}"
+             + (f" (found: {', '.join(found)})" if found else ""))
 
 
 def load(path):
@@ -98,7 +115,7 @@ expected input layout (what run_rotor_table.sh produces):
 
   runs/VR12_c0.08/            <- pass this path as --case
     VR12_m030/polar.csv       <- one directory per Mach, NNN = round(Mach*100)
-    VR12_m050/polar.csv          the "VR12" part is what you pass as --airfoil
+    VR12_m050/polar.csv          the "VR12" part is the (usually inferred) --airfoil
     VR12_m065/polar.csv
 
 output:
@@ -107,30 +124,30 @@ output:
 
 example:
 
-  python tools/build_c81.py \\
-      --case    runs/VR12_c0.08 \\
-      --airfoil VR12 \\
-      --name    VR_12 \\
-      --cdmax   2.05
+  python tools/build_c81.py --case runs/VR12_c0.08 --name VR_12
 
-Every option is required; nothing is guessed.""",
+Only --case and --name are required.""",
         formatter_class=argparse.RawDescriptionHelpFormatter)
     ap.add_argument("--case", required=True, metavar="DIR",
                     help="INPUT DIRECTORY: the sweep root holding the "
                          "<airfoil>_mNNN/polar.csv subdirectories "
                          "(e.g. runs/VR12_c0.08). Relative paths are resolved "
                          "against the repo root. The .c81 file is written here too.")
-    ap.add_argument("--airfoil", required=True, metavar="NAME",
-                    help="airfoil name as spelled in the <airfoil>_mNNN subdirectory "
-                         "names, e.g. VR12, n0012, NACA0015 (case-insensitive)")
+    ap.add_argument("--airfoil", metavar="NAME",
+                    help="OPTIONAL: airfoil name as spelled in the <airfoil>_mNNN "
+                         "subdirectory names, e.g. VR12, n0012, NACA0015 "
+                         "(case-insensitive). Inferred from --case when the sweep "
+                         "directory holds a single airfoil, which is the normal case; "
+                         "only needed to disambiguate a hand-assembled directory.")
     ap.add_argument("--name", required=True, metavar="NAME",
                     help="name of the table itself: goes in the C81 header and "
                          "becomes the output filename <case>/<name>.c81 "
                          "(max 30 chars, e.g. VR_12)")
-    ap.add_argument("--cdmax", type=float, required=True, metavar="CD",
-                    help="flat-plate CD at 90 deg used by the Viterna "
-                         "extrapolation to +-180 deg; 1.11+0.018*AR for a finite "
-                         "wing, ~2.0 for a 2D section (e.g. 2.05)")
+    ap.add_argument("--cdmax", type=float, default=DEFAULT_CDMAX, metavar="CD",
+                    help=f"OPTIONAL: flat-plate CD at 90 deg used by the Viterna "
+                         f"extrapolation to +-180 deg (default %(default)s, the "
+                         f"standard 2D value). Override only for a finite wing, "
+                         f"where Viterna gives cdmax = 1.11 + 0.018*AR.")
     args = ap.parse_args()
     case_dir, airfoil = resolve_case(args.airfoil, args.case)
     table_name = args.name
