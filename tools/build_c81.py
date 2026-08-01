@@ -1,18 +1,25 @@
 #!/usr/bin/env python3
-"""Assemble a whole ARCS C81 table from SU2 polar.csv columns, any airfoil.
+"""Assemble a whole C81 airfoil table from SU2 polar.csv columns, any airfoil.
 
-Reads every runs/<airfoil>_m0NN/polar.csv (NN = Mach*100), keeps the converged
-CFD points, and Viterna-extrapolates each column to the full +-180 deg range so
-the ARCS C81 interpolator (which THROWS outside the tabulated range) is always
-in bounds. Emits CL, CD and CM on a common alpha grid x the Mach grid.
+Reads every <case>/<airfoil>_mNNN/polar.csv (NNN = round(Mach*100), the layout
+run_rotor_table.sh writes under runs/<airfoil>_c<chord> or runs/<airfoil>_Re<re>),
+keeps the converged CFD points, and Viterna-extrapolates each column to the full
++-180 deg range so the C81 interpolator is always in bounds. Emits CL, CD and CM
+on a common alpha grid x the Mach grid.
 
 The Mach grid gains a 0.0 column: the incompressible-limit copy of the lowest
 Mach run (the polar is ~Mach-independent as M->0, and inboard low-speed sections
-carry negligible power) -- required because ARCS queries M->0 inboard and would
-otherwise throw.
+carry negligible power) -- required because queries at M->0 inboard would
+otherwise be out of bounds.
 
-Usage: python tools/build_c81.py --airfoil vr12 [--func VR_12_su2] [--cdmax 2.05]
-       writes runs/<func>.cpp.txt (paste-ready) and prints a summary.
+Output format follows the C81 specification:
+  Line 1: 30-char padded name, then six space-separated counts
+  Lines 2+: CL block, CD block, CM block (each with Mach row + alpha rows)
+
+Usage: python tools/build_c81.py --airfoil VR12 --case runs/VR12_c0.08 \
+           --name VR_12 --cdmax 2.05
+       writes <case>/<name>.c81 and prints a summary.  Every option is required;
+       nothing is guessed.
 """
 import argparse
 import csv
@@ -27,13 +34,30 @@ sys.path.insert(0, os.path.dirname(os.path.abspath(__file__)))
 from viterna import extrapolate_column
 
 HERE = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
-RUNS = os.path.join(HERE, "runs")
 
 # Common output alpha grid: fine 1-deg core over the CFD range, coarser to +-180.
 CORE = list(range(-20, 21))
 WING = [22, 24, 27, 30, 35, 40, 45, 50, 60, 70, 80, 90, 100, 110, 120, 130, 140,
         150, 160, 170, 180]
 OUT_ALPHA = sorted(set([-a for a in WING] + CORE + WING))   # -180..180
+
+
+def resolve_case(airfoil, case):
+    """Return (case_dir, airfoil_as_spelled_on_disk).
+
+    run_rotor_table.sh derives OUTROOT as runs/<AIRFOIL>_c<CHORD> (or _Re<RE>)
+    and writes <OUTROOT>/<AIRFOIL>_mNNN.  The airfoil is spelled inconsistently
+    across the runs (n0012, NACA0015, VR12), so match the Mach dirs
+    case-insensitively and then use the on-disk spelling.
+    """
+    case_dir = case if os.path.isabs(case) else os.path.join(HERE, case)
+    if not os.path.isdir(case_dir):
+        sys.exit(f"no such case directory: {case_dir}")
+    for d in sorted(glob.glob(os.path.join(case_dir, "*_m*"))):
+        stem = re.match(r"(.+)_m\d+$", os.path.basename(d))
+        if os.path.isdir(d) and stem and stem.group(1).lower() == airfoil.lower():
+            return case_dir, stem.group(1)
+    sys.exit(f"no {airfoil}_mNNN column directories under {case_dir}")
 
 
 def load(path):
@@ -48,25 +72,39 @@ def load(path):
     return (np.array(a)[o], np.array(cl)[o], np.array(cd)[o], np.array(cm)[o])
 
 
-def fmt(cols, machs):
-    rows = []
-    for i in range(len(OUT_ALPHA)):
-        rows.append("      {" + ", ".join(f"{cols[m][i]:.6f}" for m in machs) + "}")
-    return ",\n".join(rows)
+def format_c81_block(cols, machs, alphas):
+    """Format a single coefficient block (CL, CD, or CM) in C81 format.
+
+    Returns a list of lines:
+      - First line: Mach values
+      - Subsequent lines: alpha value followed by coefficients at each Mach
+    """
+    lines = []
+    # Mach row
+    lines.append("  ".join(f"{m:.6f}" for m in machs))
+    # Alpha rows: each row is alpha followed by values at each Mach
+    for i, alpha in enumerate(alphas):
+        row_vals = [f"{alpha:.6f}"] + [f"{cols[m][i]:.6f}" for m in machs]
+        lines.append("  ".join(row_vals))
+    return lines
 
 
 def main():
     ap = argparse.ArgumentParser()
-    ap.add_argument("--airfoil", default="vr12", help="run-dir prefix: runs/<airfoil>_m0NN")
-    ap.add_argument("--func", default=None, help="C81 function name (default <AIRFOIL>_su2)")
-    ap.add_argument("--cdmax", type=float, default=2.05,
+    ap.add_argument("--airfoil", required=True,
+                    help="airfoil name as used by run_rotor_table.sh (case-insensitive)")
+    ap.add_argument("--case", required=True,
+                    help="run root written by run_rotor_table.sh, e.g. runs/VR12_c0.08")
+    ap.add_argument("--name", required=True, help="C81 table name")
+    ap.add_argument("--cdmax", type=float, required=True,
                     help="flat-plate CD at 90 deg for Viterna (1.11+0.018*AR; ~2 for 2D)")
     args = ap.parse_args()
-    func = args.func or f"{args.airfoil.upper()}_su2"
+    case_dir, airfoil = resolve_case(args.airfoil, args.case)
+    table_name = args.name
 
     data = {}
-    for d in sorted(glob.glob(os.path.join(RUNS, f"{args.airfoil}_m0*"))):
-        m = re.search(rf"{re.escape(args.airfoil)}_m0(\d+)", d)
+    for d in sorted(glob.glob(os.path.join(case_dir, f"{airfoil}_m*"))):
+        m = re.match(rf"{re.escape(airfoil)}_m(\d+)$", os.path.basename(d))
         pol = os.path.join(d, "polar.csv")
         if not m or not os.path.exists(pol):
             continue
@@ -74,7 +112,7 @@ def main():
         if a.size >= 4:
             data[int(m.group(1)) / 100.0] = (a, cl, cd, cmv)
     if not data:
-        sys.exit(f"no converged polar.csv under runs/{args.airfoil}_m0*")
+        sys.exit(f"no converged polar.csv under {case_dir}/{airfoil}_mNNN")
 
     warns = []
     warn = lambda msg: warns.append(msg)
@@ -104,31 +142,33 @@ def main():
         if CD[m][i90] <= 1.0:
             warn(f"M{m:g}: CD@90 = {CD[m][i90]:.2f} not flat-plate-like")
 
-    m_lit = ", ".join(f"{m:g}" for m in machs)
-    a_lit = ",".join(f"{a:g}" for a in OUT_ALPHA)
-    body = lambda tag, C: f"""  static constexpr const std::size_t num_mach_{tag}  = {len(machs)};
-  static constexpr const std::size_t num_alpha_{tag} = {len(OUT_ALPHA)};
-  static const std::vector<float> vals_mach_{tag}{{{m_lit}}};
-  static const std::vector<float> vals_alpha_{tag}{{{a_lit}}};
-  static const std::vector<std::vector<float>> coeffs_{tag}{{
-{fmt(C, machs)}}};"""
-    out = os.path.join(RUNS, f"{func}.cpp.txt")
+    # Build C81 file content
+    n_mach = len(machs)
+    n_alpha = len(OUT_ALPHA)
+
+    # Line 1: 30-char padded name + six counts (all blocks use same grid)
+    name_field = table_name[:30].ljust(30)
+    counts = f"{n_mach} {n_alpha} {n_mach} {n_alpha} {n_mach} {n_alpha}"
+    header_line = name_field + counts
+
+    # Format the three coefficient blocks
+    cl_lines = format_c81_block(CL, machs, OUT_ALPHA)
+    cd_lines = format_c81_block(CD, machs, OUT_ALPHA)
+    cm_lines = format_c81_block(CM, machs, OUT_ALPHA)
+
+    # Write C81 file
+    out = os.path.join(case_dir, f"{table_name}.c81")
     with open(out, "w") as f:
-        f.write(f"""const C81& {func}() {{
-  static std::string const name = "{func}";
-{body('CL', CL)}
+        f.write(header_line + "\n")
+        f.write("# CL block\n")
+        f.write("\n".join(cl_lines) + "\n")
+        f.write("# CD block\n")
+        f.write("\n".join(cd_lines) + "\n")
+        f.write("# CM block\n")
+        f.write("\n".join(cm_lines) + "\n")
 
-{body('CD', CD)}
-
-{body('CM', CM)}
-
-  static auto const c81 = C81(name, vals_alpha_CL, vals_mach_CL, coeffs_CL,
-                              vals_alpha_CD, vals_mach_CD, coeffs_CD,
-                              vals_alpha_CM, vals_mach_CM, coeffs_CM);
-  return c81;
-}}
-""")
-    print(f"{func}: columns {machs}   ({len(OUT_ALPHA)} alpha x {len(machs)} mach)")
+    print(f"{table_name}: {len(OUT_ALPHA)} alpha x {len(machs)} mach")
+    print(f"Mach values: {machs}")
     print(f"min CD@0 = {min_cd0:.4f}   CL slope@0 = {slope:.3f}/deg   cdmax = {args.cdmax}")
     print(f"wrote {out}")
     if warns:
